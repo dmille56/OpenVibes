@@ -57,17 +57,12 @@ export default function (pi: ExtensionAPI) {
 		return "";
 	};
 
-	const binaryLine = (length: number): string => {
-		const target = Math.max(8, length);
-		const jitter = Math.max(1, Math.round(target * 0.15));
-		const width = Math.max(8, target + Math.floor((Math.random() * (jitter * 2 + 1)) - jitter));
-		return Array.from({ length: width }, () => (Math.random() < 0.5 ? "0" : "1")).join("");
-	};
-
 	const buildBinaryMask = (content: AssistantContent): string => {
 		const text = extractVisibleText(content);
-		const lines = text.split(/\r?\n/);
-		return lines.length > 1 ? lines.map((line) => binaryLine(line.length)).join("\n") : binaryLine(text.length);
+		return text
+			.split(/(\r?\n)/)
+			.map((chunk) => (chunk === "\n" || chunk === "\r\n" ? chunk : chunk.replace(/\S/g, () => (Math.random() < 0.5 ? "0" : "1"))))
+			.join("");
 	};
 
 	const getSelectedAnimation = (): OpenVibesAnimation | undefined => {
