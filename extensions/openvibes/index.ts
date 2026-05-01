@@ -16,31 +16,58 @@ type AssistantContent = any;
 type SessionMessage = { role: string; [key: string]: any };
 type AssistantMessageLike = SessionMessage & { role: "assistant"; content: AssistantContent };
 
+const hiddenAssistantType = OPENVIBES_MASK_CUSTOM_TYPE;
+const maskedOriginalContentKey = Symbol("openvibes.originalAssistantContent");
+
 interface MaskedAssistantDetails {
 	originalContent: AssistantContent;
 }
+
+type MaskedAssistantMessage = AssistantMessageLike & {
+	[maskedOriginalContentKey]?: AssistantContent;
+};
 
 interface OverlayState {
 	close: (() => void) | undefined;
 	promise: Promise<unknown> | undefined;
 }
 
-const hiddenAssistantType = OPENVIBES_MASK_CUSTOM_TYPE;
-
 export default function (pi: ExtensionAPI) {
 	let settings: OpenVibesSettings = { ...defaultOpenVibesSettings };
 	let animations: OpenVibesAnimation[] = [];
 	let overlay: OverlayState | undefined;
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
-	let rainMaskText = "RAIN";
 
 	const cloneContent = (content: AssistantContent): AssistantContent => structuredClone(content);
 
-	const frameToPlainText = (player: { frame: (idx: number) => Array<Array<{ glyph: string }>> }, frameIndex = 0): string => {
-		return player
-			.frame(frameIndex)
-			.map((row) => row.map((cell) => cell.glyph).join(""))
-			.join("\n");
+	const extractVisibleText = (content: AssistantContent, seen = new WeakSet<object>()): string => {
+		if (typeof content === "string") return content;
+		if (typeof content === "number" || typeof content === "boolean") return String(content);
+		if (!content || typeof content !== "object") return "";
+		if (Array.isArray(content)) return content.map((item) => extractVisibleText(item, seen)).join("");
+		if (seen.has(content)) return "";
+		seen.add(content);
+
+		const record = content as Record<string, unknown>;
+		if (typeof record.text === "string") return record.text;
+		if (typeof record.content === "string") return record.content;
+		if (Array.isArray(record.content)) return extractVisibleText(record.content, seen);
+		if (Array.isArray(record.parts)) return extractVisibleText(record.parts, seen);
+		if (Array.isArray(record.children)) return extractVisibleText(record.children, seen);
+		return "";
+	};
+
+	const binaryLine = (length: number): string => {
+		const target = Math.max(8, length);
+		const jitter = Math.max(1, Math.round(target * 0.15));
+		const width = Math.max(8, target + Math.floor((Math.random() * (jitter * 2 + 1)) - jitter));
+		return Array.from({ length: width }, () => (Math.random() < 0.5 ? "0" : "1")).join("");
+	};
+
+	const buildBinaryMask = (content: AssistantContent): string => {
+		const text = extractVisibleText(content);
+		const lines = text.split(/\r?\n/);
+		return lines.length > 1 ? lines.map((line) => binaryLine(line.length)).join("\n") : binaryLine(text.length);
 	};
 
 	const getSelectedAnimation = (): OpenVibesAnimation | undefined => {
@@ -57,11 +84,6 @@ export default function (pi: ExtensionAPI) {
 		if (!animations.some((item) => item.name === settings.selectedAnimation)) {
 			settings.selectedAnimation = animations.find((item) => item.name === "magic")?.name ?? animations[0]!.name;
 			await persistSettings();
-		}
-		const rain = animations.find((item) => item.name === "rain");
-		if (rain) {
-			const player = await loadOpenVibesAnimation(rain.path);
-			rainMaskText = frameToPlainText(player, 0);
 		}
 	};
 
@@ -120,10 +142,16 @@ export default function (pi: ExtensionAPI) {
 
 	const maskAssistantMessage = (message: AssistantMessageLike): void => {
 		if (!settings.enabled) return;
-		const details = { originalContent: cloneContent(message.content) };
-		assistantRestoreQueue.push(details);
-		pi.appendEntry(hiddenAssistantType, details);
-		message.content = [{ type: "text", text: rainMaskText }];
+		const maskedMessage = message as MaskedAssistantMessage;
+		let originalContent = maskedMessage[maskedOriginalContentKey];
+		if (originalContent === undefined) {
+			originalContent = cloneContent(message.content);
+			maskedMessage[maskedOriginalContentKey] = originalContent;
+			const details = { originalContent };
+			assistantRestoreQueue.push(details);
+			pi.appendEntry(hiddenAssistantType, details);
+		}
+		message.content = [{ type: "text", text: buildBinaryMask(originalContent) }];
 	};
 
 	const restoreBranchQueue = (ctx: ExtensionContext): void => {
@@ -131,7 +159,7 @@ export default function (pi: ExtensionAPI) {
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "custom" && entry.customType === hiddenAssistantType) {
 				const details = entry.data as MaskedAssistantDetails | undefined;
-				if (details?.originalContent) {
+				if (details?.originalContent !== undefined) {
 					assistantRestoreQueue.push(details);
 				}
 			}
@@ -145,7 +173,7 @@ export default function (pi: ExtensionAPI) {
 			restored.push(message);
 			if (message.role === "assistant") {
 				const details = queue.shift();
-				if (details?.originalContent) {
+				if (details?.originalContent !== undefined) {
 					message.content = details.originalContent;
 				}
 			}
