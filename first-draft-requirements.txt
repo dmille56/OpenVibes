@@ -8,6 +8,11 @@ Overlay feature requirements:
 5. The extension should allow for other milli animations to be loaded if present in a user config directory.
 6. When the AI is finished running the overlay should not be shown any more
 
+Here's some URLs that give examples how PI overlays work:
+- https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/examples/extensions/doom-overlay
+- https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/examples/extensions/overlay-test.ts
+- https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/examples/extensions/overlay-qa-tests.ts
+
 Mask feature requirements:
 1. AI output should always be masked while the extension is active.
 2. Any AI output should be replaced with a milli overlay (using the rain image).
