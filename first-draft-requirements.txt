@@ -1,4 +1,4 @@
-Help me design an overlay for PI terminal coding agent (documentation at: https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).  This should be an extension to pi called OpenVibes.
+Help me design an overlay for PI terminal coding agent (documentation at: https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).  This should be an extension to pi called OpenVibes.  This should be it's own Typescript node project.
 
 Overlay feature requirements:
 1. When it's AI is running it should show an overlay over the terminal.  This terminal should use the library milli and make it so the AI coding output is not visible while running (documentation at: https://github.com/Amansingh-afk/milli).
