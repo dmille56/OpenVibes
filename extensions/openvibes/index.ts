@@ -75,7 +75,7 @@ export default function (pi: ExtensionAPI) {
 		overlay?.close?.();
 		overlay = undefined;
 		if (ctx.hasUI) {
-			ctx.ui.setWorkingVisible(true);
+			ctx.ui.setWorkingVisible?.(true);
 		}
 	};
 
@@ -110,7 +110,7 @@ export default function (pi: ExtensionAPI) {
 				},
 			},
 		);
-		ctx.ui.setWorkingVisible(false);
+		ctx.ui.setWorkingVisible?.(false);
 		void overlay.promise.finally(() => {
 			if (overlay?.close === closeFn) {
 				overlay = undefined;
