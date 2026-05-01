@@ -18,13 +18,11 @@ type AssistantMessageLike = SessionMessage & { role: "assistant"; content: Assis
 
 interface MaskedAssistantDetails {
 	originalContent: AssistantContent;
-	turnId: number;
 }
 
 interface OverlayState {
 	close: (() => void) | undefined;
 	promise: Promise<unknown> | undefined;
-	turnId: number;
 }
 
 const hiddenAssistantType = OPENVIBES_MASK_CUSTOM_TYPE;
@@ -33,9 +31,7 @@ export default function (pi: ExtensionAPI) {
 	let settings: OpenVibesSettings = { ...defaultOpenVibesSettings };
 	let animations: OpenVibesAnimation[] = [];
 	let overlay: OverlayState | undefined;
-	let currentTurnId = 0;
-	let pendingAssistantContent: AssistantContent | undefined;
-	let pendingAssistantTurnId: number | undefined;
+	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
 	let rainMaskText = "RAIN";
 
 	const cloneContent = (content: AssistantContent): AssistantContent => structuredClone(content);
@@ -97,7 +93,7 @@ export default function (pi: ExtensionAPI) {
 		if (!ctx.hasUI) return;
 
 		let closeFn: (() => void) | undefined;
-		overlay = { close: undefined, promise: undefined, turnId: currentTurnId };
+		overlay = { close: undefined, promise: undefined };
 		overlay.promise = ctx.ui.custom(
 			(tui, theme, _keybindings, done) => {
 				closeFn = () => done(undefined);
@@ -124,47 +120,34 @@ export default function (pi: ExtensionAPI) {
 
 	const maskAssistantMessage = (message: AssistantMessageLike): void => {
 		if (!settings.enabled) return;
-		pendingAssistantContent = cloneContent(message.content);
-		pendingAssistantTurnId = currentTurnId;
+		const details = { originalContent: cloneContent(message.content) };
+		assistantRestoreQueue.push(details);
+		pi.appendEntry(hiddenAssistantType, details);
 		message.content = [{ type: "text", text: rainMaskText }];
 	};
 
-	const flushMaskedAssistantMessages = (): void => {
-		if (!pendingAssistantContent) return;
-		pi.sendMessage(
-			{
-				customType: hiddenAssistantType,
-				content: "",
-				display: false,
-				details: {
-					originalContent: pendingAssistantContent,
-					turnId: pendingAssistantTurnId ?? currentTurnId,
-				} satisfies MaskedAssistantDetails,
-			},
-			{ triggerTurn: false },
-		);
-		pendingAssistantContent = undefined;
-		pendingAssistantTurnId = undefined;
+	const restoreBranchQueue = (ctx: ExtensionContext): void => {
+		assistantRestoreQueue = [];
+		for (const entry of ctx.sessionManager.getBranch()) {
+			if (entry.type === "custom" && entry.customType === hiddenAssistantType) {
+				const details = entry.data as MaskedAssistantDetails | undefined;
+				if (details?.originalContent) {
+					assistantRestoreQueue.push(details);
+				}
+			}
+		}
 	};
 
 	const unmaskContextMessages = (messages: SessionMessage[]): SessionMessage[] => {
 		const restored: SessionMessage[] = [];
-		let lastAssistantIndex = -1;
+		const queue = [...assistantRestoreQueue];
 		for (const message of messages) {
-			if (message.role === "custom" && message.customType === hiddenAssistantType) {
-				const details = message.details as MaskedAssistantDetails | undefined;
-				if (details && lastAssistantIndex >= 0) {
-					const target = restored[lastAssistantIndex];
-					if (target && target.role === "assistant") {
-						target.content = details.originalContent;
-					}
-				}
-				continue;
-			}
-
 			restored.push(message);
 			if (message.role === "assistant") {
-				lastAssistantIndex = restored.length - 1;
+				const details = queue.shift();
+				if (details?.originalContent) {
+					message.content = details.originalContent;
+				}
 			}
 		}
 		return restored;
@@ -240,6 +223,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		settings = await readSettings();
 		await refreshAnimations();
+		restoreBranchQueue(ctx);
 		showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation})` : "OpenVibes off");
 	});
 
@@ -248,7 +232,6 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
-		currentTurnId += 1;
 		if (settings.enabled) {
 			await startOverlay(ctx);
 		}
@@ -270,12 +253,7 @@ export default function (pi: ExtensionAPI) {
 		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation})`);
 	});
 
-	pi.on("turn_end", async () => {
-		flushMaskedAssistantMessages();
-	});
-
 	pi.on("agent_end", async (_event, ctx) => {
-		flushMaskedAssistantMessages();
 		closeOverlay(ctx);
 	});
 
