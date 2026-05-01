@@ -1,0 +1,15 @@
+Help me design an overlay for PI terminal coding agent (documentation at: https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent).  This should be an extension to pi called OpenVibes.
+
+Overlay feature requirements:
+1. When it's AI is running it should show an overlay over the terminal.  This terminal should use the library milli and make it so the AI coding output is not visible while running (documentation at: https://github.com/Amansingh-afk/milli).
+2. It should have a command that allows you to select different animated gifs for milli to use when displaying the overlay.
+3. The command should also allow you to toggle on or off the extension.
+4. Default milli gifs are to be stored in the images directory in this repo.  The initial default should be the magic gif.
+5. The extension should allow for other milli animations to be loaded if present in a user config directory.
+6. When the AI is finished running the overlay should not be shown any more
+
+Mask feature requirements:
+1. AI output should always be masked while the extension is active.
+2. Any AI output should be replaced with a milli overlay (using the rain image).
+3. AI output should not be allowed to be seen.  (the rain should be what is display for every AI chat bubble).
+4. User input should not be masked.
