@@ -22,7 +22,7 @@ function scaleGrid(frame: CellGrid, cols: number, rows: number): CellGrid {
 
 function frameToLines(player: AsciiPlayer, atMs: number, cols: number, rows: number): string[] {
 	const frame = scaleGrid(player.frame(player.frameIndexAt(atMs)), cols, rows);
-	return cellsToAnsi(frame, { color: true, background: true }).replace(/\n$/, "").split("\n");
+	return cellsToAnsi(frame, { color: true, background: false }).replace(/\n$/, "").split("\n");
 }
 
 export class MilliOverlayComponent implements Component {
