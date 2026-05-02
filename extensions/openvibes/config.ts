@@ -19,7 +19,7 @@ export interface OpenVibesAnimation {
 
 export const defaultOpenVibesSettings: OpenVibesSettings = {
 	enabled: true,
-	selectedAnimation: "magic",
+	selectedAnimation: "ai_genie",
 };
 
 export function getOpenVibesPackageRoot(): string {

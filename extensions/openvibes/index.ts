@@ -77,7 +77,7 @@ export default function (pi: ExtensionAPI) {
 		animations = await discoverOpenVibesAnimations();
 		if (animations.length === 0) return;
 		if (!animations.some((item) => item.name === settings.selectedAnimation)) {
-			settings.selectedAnimation = animations.find((item) => item.name === "magic")?.name ?? animations[0]!.name;
+			settings.selectedAnimation = animations.find((item) => item.name === "ai_genie")?.name ?? animations[0]!.name;
 			await persistSettings();
 		}
 	};
