@@ -115,13 +115,14 @@ export default function (pi: ExtensionAPI) {
 			(tui, theme, _keybindings, done) => {
 				closeFn = () => done(undefined);
 				overlay!.close = closeFn;
-				return new MilliOverlayComponent(tui, theme, player, `OpenVibes ${animation.name}`, "AI output is masked");
+				return new MilliOverlayComponent(tui, player);
 			},
 			{
 				overlay: true,
 				overlayOptions: {
 					anchor: "center",
 					width: "100%",
+					height: "100%",
 					maxHeight: "100%",
 					margin: 0,
 				},

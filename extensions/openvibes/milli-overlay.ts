@@ -1,16 +1,28 @@
-import { AsciiPlayer } from "@amansingh-afk/milli";
+import { AsciiPlayer, cellsToAnsi } from "@amansingh-afk/milli";
+import type { CellGrid } from "@amansingh-afk/milli";
 import type { Component, TUI } from "@mariozechner/pi-tui";
-import type { Theme } from "@mariozechner/pi-coding-agent";
 
-function repeat(count: number, text = ""): string[] {
-	return Array.from({ length: Math.max(0, count) }, () => text);
+function scaleGrid(frame: CellGrid, cols: number, rows: number): CellGrid {
+	const srcRows = frame.length;
+	const srcCols = frame[0]?.length ?? 0;
+	if (srcRows === 0 || srcCols === 0 || cols <= 0 || rows <= 0) return frame;
+
+	const scaled: CellGrid = [];
+	for (let y = 0; y < rows; y++) {
+		const sy = Math.min(srcRows - 1, Math.floor((y * srcRows) / rows));
+		const row = [] as CellGrid[number];
+		for (let x = 0; x < cols; x++) {
+			const sx = Math.min(srcCols - 1, Math.floor((x * srcCols) / cols));
+			row.push(frame[sy]![sx]!);
+		}
+		scaled.push(row);
+	}
+	return scaled;
 }
 
-function frameToLines(player: AsciiPlayer, atMs: number, width: number): string[] {
-	const lines = player.renderAnsiAt(atMs, true).replace(/\n$/, "").split("\n");
-	const pad = Math.max(0, Math.floor((width - player.width) / 2));
-	const left = " ".repeat(pad);
-	return lines.map((line) => `${left}${line}`);
+function frameToLines(player: AsciiPlayer, atMs: number, cols: number, rows: number): string[] {
+	const frame = scaleGrid(player.frame(player.frameIndexAt(atMs)), cols, rows);
+	return cellsToAnsi(frame, { color: true, background: true }).replace(/\n$/, "").split("\n");
 }
 
 export class MilliOverlayComponent implements Component {
@@ -19,20 +31,15 @@ export class MilliOverlayComponent implements Component {
 
 	constructor(
 		private readonly tui: TUI,
-		private readonly theme: Theme,
 		private readonly player: AsciiPlayer,
-		private readonly title: string,
-		private readonly subtitle: string,
 	) {
 		this.timer = setInterval(() => this.tui.requestRender(), 80);
 	}
 
 	render(width: number): string[] {
-		const animation = frameToLines(this.player, Date.now() - this.startedAt, width);
-		const caption = this.theme.fg("accent", `${this.title}`);
-		const hint = this.theme.fg("dim", this.subtitle);
-		const topPad = repeat(Math.max(0, Math.floor((Math.max(0, (process.stdout.rows ?? 24) - animation.length - 2)) / 2)));
-		return [...topPad, caption, ...animation, hint];
+		const cols = Math.max(1, process.stdout.columns ?? width);
+		const rows = Math.max(1, process.stdout.rows ?? 24);
+		return frameToLines(this.player, Date.now() - this.startedAt, cols, rows);
 	}
 
 	invalidate(): void {
