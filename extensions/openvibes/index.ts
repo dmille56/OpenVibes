@@ -88,6 +88,22 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const formatStatusHelp = (): string => {
+		const selected = getSelectedAnimation();
+		const animationLabel = selected ? `${selected.name} (${selected.source === "user" ? "user" : "bundled"})` : "none";
+		return [
+			`OpenVibes: ${settings.enabled ? "on" : "off"}`,
+			`Animation: ${animationLabel}`,
+			"",
+			"Usage:",
+			"  /openvibes on",
+			"  /openvibes off",
+			"  /openvibes toggle",
+			"  /openvibes list",
+			"  /openvibes select <name>",
+		].join("\n");
+	};
+
 	const closeOverlay = (ctx: ExtensionContext): void => {
 		overlay?.close?.();
 		overlay = undefined;
@@ -184,8 +200,7 @@ export default function (pi: ExtensionAPI) {
 			const animationName = rest.join(" ").trim();
 
 			if (!action || action === "status") {
-				const selected = getSelectedAnimation()?.name ?? "none";
-				ctx.ui.notify(`OpenVibes ${settings.enabled ? "on" : "off"}, animation: ${selected}`, "info");
+				ctx.ui.notify(formatStatusHelp(), "info");
 				return;
 			}
 

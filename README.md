@@ -17,6 +17,8 @@ Use this repo as a Pi package or point Pi at the extension file directly.
 
 ## Commands
 
+- `/openvibes`  
+  Shows current status and help.
 - `/openvibes on`
 - `/openvibes off`
 - `/openvibes toggle`
