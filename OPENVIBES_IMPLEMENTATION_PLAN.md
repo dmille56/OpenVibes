@@ -2,10 +2,12 @@
 
 ## Goal
 
-Build `OpenVibes` as a Pi extension/package that adds a terminal overlay for AI runs, using `milli` animations instead of visible assistant output.
+Build `OpenVibes` as a Pi extension/package that adds a terminal overlay for AI runs, using `milli` animations and in-session assistant masking.
 
 ## Current Assets
 
+- `images/ai_genie.gif`
+- `images/ai_genie.milli`
 - `images/magic.gif`
 - `images/magic.milli`
 - `images/rain.gif`
@@ -15,8 +17,8 @@ Build `OpenVibes` as a Pi extension/package that adds a terminal overlay for AI 
 
 - Show an overlay while the AI is running.
 - Hide the normal AI streaming output while the overlay is active.
-- Default overlay animation is `magic`.
-- Masked AI output must use the `rain` animation.
+- Default overlay animation is `ai_genie`.
+- Masked AI output is replaced with a generated binary text mask.
 - Add a command to:
   - toggle the extension on/off
   - select the active overlay animation
@@ -32,11 +34,9 @@ Pi exposes `ctx.ui.custom({ overlay: true })` for floating UI, but the public ex
 That means:
 
 - Hiding the live assistant stream is straightforward with a full-screen overlay.
-- Replacing every assistant chat bubble with an animated `rain` overlay likely needs either:
-  - a small Pi API addition for assistant message rendering, or
-  - a workaround that masks finalized assistant messages with static content.
+- The current implementation uses a workaround that stores the original assistant content in a hidden custom entry and replaces the visible assistant message with binary text.
 
-This should be treated as a design dependency before implementation starts.
+This remains a design constraint if the UI ever needs richer assistant-side masking.
 
 ## Proposed Package Layout
 
@@ -46,6 +46,8 @@ OpenVibes/
 ├─ README.md
 ├─ OPENVIBES_IMPLEMENTATION_PLAN.md
 ├─ images/
+│  ├─ ai_genie.gif
+│  ├─ ai_genie.milli
 │  ├─ magic.gif
 │  ├─ magic.milli
 │  ├─ rain.gif
@@ -66,8 +68,8 @@ Persist a small config object:
 
 - `enabled`: boolean
 - `selectedAnimation`: string
-- `overlayVisible`: boolean
-- `configDir`: resolved user config path
+
+Settings are stored in `state.json` under the OpenVibes config directory.
 
 ### Startup Flow
 
@@ -127,7 +129,7 @@ Command behavior:
 Bundled animations:
 
 - read from `images/`
-- default selection is `magic`
+- default selection is `ai_genie`
 
 User animations:
 
@@ -156,12 +158,11 @@ Target behavior:
 - Assistant output should not be readable in the UI.
 - User input must continue to be readable and editable.
 
-If Pi allows assistant message rendering interception later, use that hook to replace assistant content with `rain.milli`.
+Current implementation:
 
-If not, the fallback is:
-
-- fully cover the assistant streaming area with the overlay during the turn
-- avoid showing text from the assistant stream until the turn ends
+- On assistant `message_start`, `message_update`, and `message_end`, replace visible content with a generated `0`/`1` mask.
+- Store the original assistant content in a hidden custom branch entry.
+- Restore the original assistant content in `context` before the next model call.
 
 ## Implementation Phases
 
@@ -174,17 +175,16 @@ If not, the fallback is:
 7. Masking strategy for assistant output.
 8. Documentation and usage notes.
 
-## Open Questions
+## Current Limitations
 
-- Does Pi support a built-in assistant message renderer hook in the current version?
-- If not, should the package include a minimal Pi patch request for assistant-output masking?
-- Should the active animation selection be persisted globally or per-project?
+- Assistant masking is implemented as a generated binary text replacement rather than a dedicated renderer hook.
+- Settings are persisted globally under the Pi agent config root.
 
 ## Acceptance Criteria
 
 - `/openvibes` can toggle the extension.
-- `/openvibes` can select `magic` and any loaded custom animation.
+- `/openvibes` can select `ai_genie` and any loaded custom animation.
 - The overlay appears during AI runs and disappears afterward.
-- The default bundled animation is `magic`.
-- The `rain` animation is used for masking AI output.
+- The default bundled animation is `ai_genie`.
+- Assistant output is masked with generated binary text.
 - User input remains visible.

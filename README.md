@@ -1,39 +1,47 @@
 # OpenVibes
 
-Pi extension package for milli-powered terminal overlays.
+Pi extension for `milli`-powered terminal overlays.
 
 ## What it does
 
-- Shows a terminal overlay while Pi is running.
+- Shows a fullscreen overlay during agent runs.
 - Lets you toggle OpenVibes on and off.
 - Lets you choose the active overlay animation.
 - Loads bundled animations from `images/`.
 - Loads user animations from the Pi config directory.
-- Masks assistant output with the `rain` animation.
+- Masks assistant messages in-session with a binary text mask.
 
 ## Install
 
-Use this repo as a Pi package or point Pi at the extension file directly.
+Install dependencies, then run Pi with the extension entrypoint in `package.json`.
 
 ## Commands
 
-- `/openvibes`  
-  Shows current status and help.
+- `/openvibes`
+  - Shows current status and help.
 - `/openvibes on`
 - `/openvibes off`
 - `/openvibes toggle`
 - `/openvibes select <name>`
 - `/openvibes list`
 
+## Bundled Animations
+
+The repo ships these bundled animations in `images/`:
+
+- `ai_genie`
+- `magic`
+- `rain`
+
 ## Config
 
-User data is stored under:
+OpenVibes settings are stored at:
 
 ```text
-${PI_CODING_AGENT_DIR:-~/.pi/agent}/openvibes/
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/openvibes/state.json
 ```
 
-Put extra `.milli` files in:
+User-provided `.milli` files go in:
 
 ```text
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/openvibes/animations/
@@ -41,4 +49,4 @@ ${PI_CODING_AGENT_DIR:-~/.pi/agent}/openvibes/animations/
 
 ## Notes
 
-Pi currently has no documented display-only assistant renderer hook, so OpenVibes preserves the real assistant content in a hidden message and restores it in `context` before the next model call.
+The default selected animation is `ai_genie`. When enabled, assistant messages are replaced with a generated `0`/`1` mask in the visible session output, and the original assistant content is restored before the next model call.
