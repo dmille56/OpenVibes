@@ -13,7 +13,17 @@ Pi extension for `milli`-powered terminal overlays.
 
 ## Install
 
-Install dependencies, then run Pi with the extension entrypoint in `package.json`.
+Install from git with Pi:
+
+```bash
+pi install git:github.com/dmille56/OpenVibes
+```
+
+Or install from a local checkout:
+
+```bash
+pi install /path/to/OpenVibes
+```
 
 ## Commands
 
