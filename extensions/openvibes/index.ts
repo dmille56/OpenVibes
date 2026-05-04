@@ -38,12 +38,16 @@ export default function (pi: ExtensionAPI) {
 	let animations: OpenVibesAnimation[] = [];
 	let overlay: OverlayState | undefined;
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
+	let agentRunning = false;
 
 	const cloneContent = (content: AssistantContent): AssistantContent => structuredClone(content);
 
 	const setEditor = (ctx: ExtensionContext): void => {
 		if (!ctx.hasUI) return;
-		ctx.ui.setEditorComponent((tui, theme, keybindings) => new WandTrailEditor(tui, theme, keybindings, () => settings.enabled));
+		ctx.ui.setEditorComponent(
+			(tui, theme, keybindings) =>
+				new WandTrailEditor(tui, theme, keybindings, () => settings.enabled, () => agentRunning, () => settings.selectedAnimation),
+		);
 	};
 
 	const extractVisibleText = (content: AssistantContent, seen = new WeakSet<object>()): string => {
@@ -214,31 +218,31 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-		if (action === "toggle") {
-			settings.enabled = !settings.enabled;
-			await persistSettings();
-			setEditor(ctx);
-			showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation})` : "OpenVibes off");
-			ctx.ui.notify(`OpenVibes ${settings.enabled ? "enabled" : "disabled"}`, "info");
-			return;
-		}
+			if (action === "toggle") {
+				settings.enabled = !settings.enabled;
+				await persistSettings();
+				setEditor(ctx);
+				showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation})` : "OpenVibes off");
+				ctx.ui.notify(`OpenVibes ${settings.enabled ? "enabled" : "disabled"}`, "info");
+				return;
+			}
 
-		if (action === "on") {
-			settings.enabled = true;
-			await persistSettings();
-			setEditor(ctx);
-			showStatus(ctx, `OpenVibes on (${settings.selectedAnimation})`);
-			ctx.ui.notify("OpenVibes enabled", "info");
-			return;
-		}
+			if (action === "on") {
+				settings.enabled = true;
+				await persistSettings();
+				setEditor(ctx);
+				showStatus(ctx, `OpenVibes on (${settings.selectedAnimation})`);
+				ctx.ui.notify("OpenVibes enabled", "info");
+				return;
+			}
 
-		if (action === "off") {
-			settings.enabled = false;
-			await persistSettings();
-			setEditor(ctx);
-			showStatus(ctx, "OpenVibes off");
-			ctx.ui.notify("OpenVibes disabled", "info");
-			closeOverlay(ctx);
+			if (action === "off") {
+				settings.enabled = false;
+				await persistSettings();
+				setEditor(ctx);
+				showStatus(ctx, "OpenVibes off");
+				ctx.ui.notify("OpenVibes disabled", "info");
+				closeOverlay(ctx);
 				return;
 			}
 
@@ -274,6 +278,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		settings = await readSettings();
+		agentRunning = false;
 		await refreshAnimations();
 		restoreBranchQueue(ctx);
 		setEditor(ctx);
@@ -285,9 +290,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
+		agentRunning = true;
 		if (settings.enabled) {
 			await startOverlay(ctx);
 		}
+		showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation}) · casting` : "OpenVibes off");
 	});
 
 	pi.on("message_start", async (event) => {
@@ -303,14 +310,17 @@ export default function (pi: ExtensionAPI) {
 	pi.on("message_end", async (event, ctx) => {
 		if (!settings.enabled || event.message.role !== "assistant") return;
 		maskAssistantMessage(event.message);
-		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation})`);
+		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · ${agentRunning ? "casting" : "idle"}`);
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
+		agentRunning = false;
+		showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation}) · idle` : "OpenVibes off");
 		closeOverlay(ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		agentRunning = false;
 		closeOverlay(ctx);
 	});
 }

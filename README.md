@@ -64,3 +64,4 @@ The default selected animation is `ai_genie`. When enabled, assistant messages a
 
 While OpenVibes is enabled, the prompt editor shows a magical wand trail as you type.
 Printable keystrokes now also trigger short-lived spark bursts so the trail feels more alive.
+The editor frame and status line also pulse by state: idle, typing, and agent-running.
