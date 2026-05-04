@@ -5,6 +5,7 @@ Pi extension for `milli`-powered terminal overlays.
 ## What it does
 
 - Shows a fullscreen overlay during agent runs.
+- Adds a wand-like trail in the prompt editor while typing.
 - Lets you toggle OpenVibes on and off.
 - Lets you choose the active overlay animation.
 - Loads bundled animations from `images/`.
@@ -60,3 +61,5 @@ ${PI_CODING_AGENT_DIR:-~/.pi/agent}/openvibes/animations/
 ## Notes
 
 The default selected animation is `ai_genie`. When enabled, assistant messages are replaced with a generated `0`/`1` mask in the visible session output, and the original assistant content is restored before the next model call.
+
+While OpenVibes is enabled, the prompt editor shows a magical wand trail as you type.

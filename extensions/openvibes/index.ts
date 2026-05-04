@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { MilliOverlayComponent } from "./milli-overlay.js";
+import { WandTrailEditor } from "./wand-editor.js";
 import {
 	defaultOpenVibesSettings,
 	getOpenVibesAnimationDir,
@@ -39,6 +40,11 @@ export default function (pi: ExtensionAPI) {
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
 
 	const cloneContent = (content: AssistantContent): AssistantContent => structuredClone(content);
+
+	const setEditor = (ctx: ExtensionContext): void => {
+		if (!ctx.hasUI) return;
+		ctx.ui.setEditorComponent((tui, theme, keybindings) => new WandTrailEditor(tui, theme, keybindings, () => settings.enabled));
+	};
 
 	const extractVisibleText = (content: AssistantContent, seen = new WeakSet<object>()): string => {
 		if (typeof content === "string") return content;
@@ -127,25 +133,29 @@ export default function (pi: ExtensionAPI) {
 
 		let closeFn: (() => void) | undefined;
 		overlay = { close: undefined, promise: undefined };
-		overlay.promise = ctx.ui.custom(
-			(tui, theme, _keybindings, done) => {
-				closeFn = () => done(undefined);
-				overlay!.close = closeFn;
-				return new MilliOverlayComponent(tui, player);
-			},
-			{
-				overlay: true,
-				overlayOptions: {
-					anchor: "center",
-					width: "100%",
-					height: "100%",
-					maxHeight: "100%",
-					margin: 0,
+		try {
+			overlay.promise = ctx.ui.custom(
+				(tui, theme, _keybindings, done) => {
+					closeFn = () => done(undefined);
+					overlay!.close = closeFn;
+					return new MilliOverlayComponent(tui, player);
 				},
-			},
-		);
+				{
+					overlay: true,
+					overlayOptions: {
+						anchor: "center",
+						width: "100%",
+						maxHeight: "100%",
+						margin: 0,
+					},
+				},
+			);
+		} catch (error) {
+			overlay = undefined;
+			throw error;
+		}
 		ctx.ui.setWorkingVisible?.(false);
-		void overlay.promise.finally(() => {
+		void overlay.promise.catch(() => undefined).finally(() => {
 			if (overlay?.close === closeFn) {
 				overlay = undefined;
 			}
@@ -204,28 +214,31 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (action === "toggle") {
-				settings.enabled = !settings.enabled;
-				await persistSettings();
-				showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation})` : "OpenVibes off");
-				ctx.ui.notify(`OpenVibes ${settings.enabled ? "enabled" : "disabled"}`, "info");
-				return;
-			}
+		if (action === "toggle") {
+			settings.enabled = !settings.enabled;
+			await persistSettings();
+			setEditor(ctx);
+			showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation})` : "OpenVibes off");
+			ctx.ui.notify(`OpenVibes ${settings.enabled ? "enabled" : "disabled"}`, "info");
+			return;
+		}
 
-			if (action === "on") {
-				settings.enabled = true;
-				await persistSettings();
-				showStatus(ctx, `OpenVibes on (${settings.selectedAnimation})`);
-				ctx.ui.notify("OpenVibes enabled", "info");
-				return;
-			}
+		if (action === "on") {
+			settings.enabled = true;
+			await persistSettings();
+			setEditor(ctx);
+			showStatus(ctx, `OpenVibes on (${settings.selectedAnimation})`);
+			ctx.ui.notify("OpenVibes enabled", "info");
+			return;
+		}
 
-			if (action === "off") {
-				settings.enabled = false;
-				await persistSettings();
-				showStatus(ctx, "OpenVibes off");
-				ctx.ui.notify("OpenVibes disabled", "info");
-				closeOverlay(ctx);
+		if (action === "off") {
+			settings.enabled = false;
+			await persistSettings();
+			setEditor(ctx);
+			showStatus(ctx, "OpenVibes off");
+			ctx.ui.notify("OpenVibes disabled", "info");
+			closeOverlay(ctx);
 				return;
 			}
 
@@ -263,10 +276,11 @@ export default function (pi: ExtensionAPI) {
 		settings = await readSettings();
 		await refreshAnimations();
 		restoreBranchQueue(ctx);
+		setEditor(ctx);
 		showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation})` : "OpenVibes off");
 	});
 
-	pi.on("context", async (event) => {
+	(pi.on as any)("context", async (event: { messages: SessionMessage[] }) => {
 		return { messages: unmaskContextMessages(event.messages) };
 	});
 
