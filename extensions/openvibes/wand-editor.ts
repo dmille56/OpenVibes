@@ -15,6 +15,11 @@ const MODE_COLORS: Record<EditorMode, [number, number, number]> = {
 	typing: [217, 156, 255],
 	"agent-running": [255, 170, 92],
 };
+const MODE_LABELS: Record<EditorMode, string> = {
+	idle: "idle",
+	typing: "typing",
+	"agent-running": "casting",
+};
 const MAX_SPARKS = 18;
 const SPARK_LIFETIME = 7;
 const FRAME_MS = 70;
@@ -88,14 +93,7 @@ export class WandTrailEditor extends CustomEditor {
 	}
 
 	private getStatusLabel(mode: EditorMode): string {
-		switch (mode) {
-			case "agent-running":
-				return "casting";
-			case "typing":
-				return "typing";
-			default:
-				return "idle";
-		}
+		return MODE_LABELS[mode];
 	}
 
 	private getFrameColor(mode: EditorMode, emphasis = false): [number, number, number] {
@@ -111,11 +109,18 @@ export class WandTrailEditor extends CustomEditor {
 		if (innerWidth === 0) return `${borderColor}${left}${RESET}`;
 
 		const cells = Array.from({ length: innerWidth }, () => "─");
-		cells[this.frame % innerWidth] = SPINNER[this.frame % SPINNER.length]!;
+		const cursor = this.frame % innerWidth;
+		cells[cursor] = SPINNER[this.frame % SPINNER.length]!;
+		if (innerWidth > 8) {
+			const auraLeft = Math.max(0, cursor - 4);
+			const auraRight = Math.min(innerWidth - 1, cursor + 4);
+			cells[auraLeft] = "·";
+			cells[auraRight] = "·";
+		}
 		return `${borderColor}${left}${cells.join("")}${right}${RESET}`;
 	}
 
-	private buildStatusLine(width: number): string {
+	private buildPlaqueLine(width: number): string {
 		if (width <= 0) return "";
 		const mode = this.getMode();
 		const borderColor = color(this.getFrameColor(mode));
@@ -123,9 +128,25 @@ export class WandTrailEditor extends CustomEditor {
 		const innerWidth = Math.max(0, width - 2);
 		if (innerWidth === 0) return `${borderColor}│${RESET}`;
 
-		const status = `${SPINNER[this.frame % SPINNER.length]!} OpenVibes · ${this.getStatusLabel(mode)} · ${this.getSelectedAnimation()}`;
-		const text = fitLine(status, innerWidth);
-		return `${borderColor}│${RESET}${accentColor}${text}${RESET}${borderColor}│${RESET}`;
+		const title = `${accentColor}✦ OpenVibes${RESET}`;
+		const content = fitLine(title, innerWidth);
+		return `${borderColor}│${RESET}${content}${borderColor}│${RESET}`;
+	}
+
+	private buildFooterLine(width: number): string {
+		if (width <= 0) return "";
+		const mode = this.getMode();
+		const borderColor = color(this.getFrameColor(mode));
+		const accentColor = color(this.getFrameColor(mode, true));
+		const dimColor = color(this.getFrameColor("idle"));
+		const innerWidth = Math.max(0, width - 2);
+		if (innerWidth === 0) return `${borderColor}│${RESET}`;
+
+		const left = `${accentColor}⟡ ${this.getStatusLabel(mode)}${RESET}`;
+		const center = `${dimColor}· ${SPINNER[this.frame % SPINNER.length]!} ·${RESET}`;
+		const right = `${accentColor}${this.getSelectedAnimation()}${RESET}`;
+		const content = fitLine(`${left}   ${center}   ${right}`, innerWidth);
+		return `${borderColor}│${RESET}${content}${borderColor}│${RESET}`;
 	}
 
 	private pruneSparks(): void {
@@ -194,7 +215,7 @@ export class WandTrailEditor extends CustomEditor {
 		const lines = super.render(innerWidth);
 		if (!this.isEnabled()) return lines;
 		this.startAnimation();
-		if (lines.length === 0) return [this.buildBorderLine(width, "╭", "╮"), this.buildStatusLine(width)];
+		if (lines.length === 0) return [this.buildBorderLine(width, "╭", "╮"), this.buildPlaqueLine(width), this.buildFooterLine(width), this.buildBorderLine(width, "╰", "╯")];
 
 		const borderColor = color(this.getFrameColor(this.getMode()));
 		const body = lines.map((line) => `${borderColor}│${RESET}${fitLine(line, innerWidth)}${borderColor}│${RESET}`);
@@ -220,7 +241,7 @@ export class WandTrailEditor extends CustomEditor {
 			body[body.length - 1] = `${borderColor}│${RESET}${cells.join("")}${borderColor}│${RESET}`;
 		}
 
-		return [this.buildBorderLine(width, "╭", "╮"), ...body, this.buildStatusLine(width)];
+		return [this.buildBorderLine(width, "╭", "╮"), this.buildPlaqueLine(width), ...body, this.buildFooterLine(width), this.buildBorderLine(width, "╰", "╯")];
 	}
 
 	dispose(): void {
