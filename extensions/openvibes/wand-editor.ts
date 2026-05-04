@@ -20,10 +20,18 @@ const MODE_LABELS: Record<EditorMode, string> = {
 	typing: "typing",
 	"agent-running": "casting",
 };
+const QUOTE_COLORS: [number, number, number][] = [
+	[255, 223, 120],
+	[217, 156, 255],
+	[128, 231, 255],
+	[255, 170, 92],
+	[167, 255, 198],
+];
 const MAX_SPARKS = 18;
 const SPARK_LIFETIME = 7;
 const FRAME_MS = 70;
 const TYPING_WINDOW_MS = 900;
+const QUOTE_FRAME_DIVISOR = 6;
 
 type EditorMode = "idle" | "typing" | "agent-running";
 
@@ -42,6 +50,23 @@ function fitLine(line: string, width: number): string {
 	const trimmed = truncateToWidth(line, width, "");
 	const padding = Math.max(0, width - visibleWidth(trimmed));
 	return `${trimmed}${" ".repeat(padding)}`;
+}
+
+function rightAlign(text: string, width: number): string {
+	const trimmed = truncateToWidth(text, width, "");
+	const padding = Math.max(0, width - visibleWidth(trimmed));
+	return `${" ".repeat(padding)}${trimmed}`;
+}
+
+function colorizeTokens(text: string, paletteOffset: number): string {
+	return text
+		.split(/(\s+)/)
+		.map((token, index) => {
+			if (/^\s+$/.test(token)) return token;
+			const rgb = QUOTE_COLORS[(paletteOffset + index) % QUOTE_COLORS.length]!;
+			return `${color(rgb)}${token}${RESET}`;
+		})
+		.join("");
 }
 
 export class WandTrailEditor extends CustomEditor {
@@ -125,11 +150,16 @@ export class WandTrailEditor extends CustomEditor {
 		const mode = this.getMode();
 		const borderColor = color(this.getFrameColor(mode));
 		const accentColor = color(this.getFrameColor(mode, true));
+		const dimColor = color(this.getFrameColor("idle"));
 		const innerWidth = Math.max(0, width - 2);
 		if (innerWidth === 0) return `${borderColor}│${RESET}`;
 
 		const title = `${accentColor}✦ OpenVibes${RESET}`;
-		const content = fitLine(title, innerWidth);
+		const quote = colorizeTokens('"Roads? Where we\'re going, we don\'t need roads."', Math.floor(this.frame / QUOTE_FRAME_DIVISOR));
+		const quoteWidth = visibleWidth(quote);
+		const titleWidth = visibleWidth(title) + visibleWidth(`${accentColor}⋄${RESET}`) + 1;
+		const gapWidth = Math.max(1, innerWidth - titleWidth - quoteWidth);
+		const content = fitLine(`${title} ${accentColor}⋄${RESET}${" ".repeat(gapWidth)}${dimColor}${rightAlign(quote, quoteWidth)}${RESET}`, innerWidth);
 		return `${borderColor}│${RESET}${content}${borderColor}│${RESET}`;
 	}
 
