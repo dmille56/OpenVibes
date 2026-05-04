@@ -9,10 +9,15 @@ const COLORS: [number, number, number][] = [
 	[128, 231, 255],
 	[255, 170, 92],
 ];
+const MAX_SPARKS = 18;
+const SPARK_LIFETIME = 7;
+const FRAME_MS = 70;
 
 type Spark = {
 	age: number;
 	glyph: (typeof SPARKS)[number];
+	colorIndex: number;
+	offset: number;
 };
 
 function color(rgb: [number, number, number]): string {
@@ -37,6 +42,35 @@ export class WandTrailEditor extends CustomEditor {
 		return this.getText().length > 0;
 	}
 
+	private isPrintableInput(data: string): boolean {
+		return data.length > 0 && [...data].every((char) => char >= " " && char !== "\u007f");
+	}
+
+	private burstSizeForInput(data: string): number {
+		if (
+			matchesKey(data, "escape") ||
+			matchesKey(data, "ctrl+c") ||
+			matchesKey(data, "ctrl+d") ||
+			matchesKey(data, "backspace") ||
+			matchesKey(data, "delete") ||
+			matchesKey(data, "enter")
+		) {
+			return 0;
+		}
+
+		if (!this.isPrintableInput(data)) return 0;
+		if (data.length === 1) return 3;
+		return Math.min(6, Math.max(2, Math.ceil(data.length / 4)));
+	}
+
+	private pruneSparks(): void {
+		for (let index = this.sparks.length - 1; index >= 0; index--) {
+			if (this.sparks[index]!.age > SPARK_LIFETIME) {
+				this.sparks.splice(index, 1);
+			}
+		}
+	}
+
 	private startAnimation(): void {
 		if (!this.isEnabled()) return;
 		if (this.animationTimer) return;
@@ -45,11 +79,12 @@ export class WandTrailEditor extends CustomEditor {
 			for (const spark of this.sparks) {
 				spark.age++;
 			}
+			this.pruneSparks();
 			this.tui.requestRender();
 			if (!this.hasContent() && this.sparks.length === 0) {
 				this.stopAnimation();
 			}
-		}, 70);
+		}, FRAME_MS);
 	}
 
 	private stopAnimation(): void {
@@ -59,23 +94,22 @@ export class WandTrailEditor extends CustomEditor {
 		}
 	}
 
-	private spawnSpark(): void {
-		this.sparks.unshift({
-			age: 0,
-			glyph: SPARKS[this.frame % SPARKS.length]!,
-		});
-		this.sparks.splice(12);
-	}
-
-	private shouldSpark(data: string): boolean {
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "ctrl+d")) return false;
-		if (data.length === 1) return data.charCodeAt(0) >= 32;
-		return matchesKey(data, "backspace") || matchesKey(data, "delete") || matchesKey(data, "left") || matchesKey(data, "right") || matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "enter") || matchesKey(data, "tab");
+	private spawnSparkBurst(count: number): void {
+		for (let index = 0; index < count; index++) {
+			this.sparks.unshift({
+				age: 0,
+				glyph: SPARKS[(this.frame + index) % SPARKS.length]!,
+				colorIndex: (this.frame + index) % COLORS.length,
+				offset: index,
+			});
+		}
+		this.sparks.splice(MAX_SPARKS);
 	}
 
 	handleInput(data: string): void {
-		if (this.isEnabled() && this.shouldSpark(data)) {
-			this.spawnSpark();
+		const burstSize = this.burstSizeForInput(data);
+		if (this.isEnabled() && burstSize > 0) {
+			this.spawnSparkBurst(burstSize);
 		}
 		super.handleInput(data);
 		if (this.isEnabled() && (this.hasContent() || this.sparks.length > 0)) {
@@ -102,11 +136,11 @@ export class WandTrailEditor extends CustomEditor {
 
 		put(head, SPARKS[(this.frame / 2) % SPARKS.length | 0]!, COLORS[this.frame % COLORS.length]!);
 		for (const spark of this.sparks) {
-			const offset = spark.age * 2 + 2;
+			const offset = spark.age * 2 + spark.offset + 2;
 			const x = head - offset;
 			if (x < 0) break;
-			if (spark.age > 8) continue;
-			const rgb = COLORS[Math.min(COLORS.length - 1, spark.age) % COLORS.length]!;
+			if (spark.age > SPARK_LIFETIME) continue;
+			const rgb = COLORS[(spark.colorIndex + spark.age) % COLORS.length]!;
 			put(x, spark.glyph, rgb);
 		}
 

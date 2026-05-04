@@ -63,3 +63,4 @@ ${PI_CODING_AGENT_DIR:-~/.pi/agent}/openvibes/animations/
 The default selected animation is `ai_genie`. When enabled, assistant messages are replaced with a generated `0`/`1` mask in the visible session output, and the original assistant content is restored before the next model call.
 
 While OpenVibes is enabled, the prompt editor shows a magical wand trail as you type.
+Printable keystrokes now also trigger short-lived spark bursts so the trail feels more alive.
