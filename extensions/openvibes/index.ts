@@ -74,11 +74,17 @@ export default function (pi: ExtensionAPI) {
 		seen.add(content);
 
 		const record = content as Record<string, unknown>;
-		if (typeof record.text === "string") return record.text;
-		if (typeof record.content === "string") return record.content;
-		if (Array.isArray(record.content)) return extractVisibleText(record.content, seen);
-		if (Array.isArray(record.parts)) return extractVisibleText(record.parts, seen);
-		if (Array.isArray(record.children)) return extractVisibleText(record.children, seen);
+		const preferredKeys = ["text", "content", "parts", "children"];
+		for (const key of preferredKeys) {
+			const extracted = extractVisibleText(record[key], seen);
+			if (extracted) return extracted;
+		}
+
+		for (const [key, value] of Object.entries(record)) {
+			if (preferredKeys.includes(key)) continue;
+			const extracted = extractVisibleText(value, seen);
+			if (extracted) return extracted;
+		}
 		return "";
 	};
 
@@ -88,6 +94,44 @@ export default function (pi: ExtensionAPI) {
 			.split(/(\r?\n)/)
 			.map((chunk) => (chunk === "\n" || chunk === "\r\n" ? chunk : chunk.replace(/\S/g, () => (Math.random() < 0.5 ? "0" : "1"))))
 			.join("");
+	};
+
+	const maskAssistantContent = (content: AssistantContent, seen = new WeakMap<object, AssistantContent>()): AssistantContent => {
+		if (typeof content === "string") return buildBinaryMask(content);
+		if (typeof content === "number" || typeof content === "boolean" || content === null || content === undefined) return content;
+		if (typeof content !== "object") return content;
+		if (Array.isArray(content)) {
+			if (seen.has(content)) return seen.get(content)!;
+			const maskedArray: AssistantContent[] = [];
+			seen.set(content, maskedArray as AssistantContent);
+			for (const item of content) {
+				maskedArray.push(maskAssistantContent(item, seen));
+			}
+			return maskedArray as AssistantContent;
+		}
+		if (seen.has(content)) return seen.get(content)!;
+
+		const record = content as Record<string, unknown>;
+		const maskedRecord: Record<string, unknown> = {};
+		seen.set(content, maskedRecord);
+
+		for (const [key, value] of Object.entries(record)) {
+			if (key === "text" && typeof value === "string") {
+				maskedRecord[key] = buildBinaryMask(value);
+				continue;
+			}
+			if (key === "content" || key === "parts" || key === "children") {
+				maskedRecord[key] = maskAssistantContent(value, seen);
+				continue;
+			}
+			if (value && typeof value === "object") {
+				maskedRecord[key] = maskAssistantContent(value, seen);
+				continue;
+			}
+			maskedRecord[key] = value;
+		}
+
+		return maskedRecord as AssistantContent;
 	};
 
 	const getMaskingLabel = (): string => (settings.maskAssistantOutput ? "masking on" : "masking off");
@@ -350,7 +394,7 @@ export default function (pi: ExtensionAPI) {
 			assistantRestoreQueue.push(details);
 			pi.appendEntry(hiddenAssistantType, details);
 		}
-		message.content = [{ type: "text", text: buildBinaryMask(originalContent) }];
+		message.content = maskAssistantContent(originalContent);
 	};
 
 	const restoreBranchQueue = (ctx: ExtensionContext): void => {
