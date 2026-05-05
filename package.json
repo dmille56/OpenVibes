@@ -1,5 +1,5 @@
 {
-  "name": "openvibes",
+  "name": "@dmille56/openvibes",
   "version": "0.1.0",
   "type": "module",
   "description": "OpenVibes Pi extension for milli-powered terminal overlays.",
@@ -7,12 +7,24 @@
   "pi": {
     "extensions": ["./extensions"]
   },
-  "files": ["extensions", "images", "cursors", "README.md", "OPENVIBES_IMPLEMENTATION_PLAN.md"],
+  "files": ["extensions", "images/**/*.milli", "README.md", "OPENVIBES_IMPLEMENTATION_PLAN.md"],
   "scripts": {
     "start": "pi --extension ./extensions/openvibes/index.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@amansingh-afk/milli": "0.0.6"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmille56/OpenVibes.git"
+  },
+  "homepage": "https://github.com/dmille56/OpenVibes#readme",
+  "bugs": {
+    "url": "https://github.com/dmille56/OpenVibes/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
