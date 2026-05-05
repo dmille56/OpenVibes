@@ -5,6 +5,7 @@ Pi extension for `milli`-powered terminal overlays.
 ## What it does
 
 - Shows a fullscreen overlay during agent runs.
+- Pauses the overlay while permission prompts are open.
 - Adds a wand-like trail in the prompt editor while typing.
 - Lets you toggle OpenVibes on and off.
 - Lets you choose the active overlay animation.
@@ -65,3 +66,4 @@ The default selected animation is `ai_genie`. When enabled, assistant messages a
 While OpenVibes is enabled, the prompt editor shows a magical wand trail as you type.
 Printable keystrokes now also trigger short-lived spark bursts so the trail feels more alive.
 The editor frame and status line also pulse by state: idle, typing, and agent-running.
+If `pi-permission-system` opens an approval dialog, the overlay steps out of the way until the request resolves.

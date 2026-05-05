@@ -16,6 +16,11 @@ type AssistantContent = any;
 
 type SessionMessage = { role: string; [key: string]: any };
 type AssistantMessageLike = SessionMessage & { role: "assistant"; content: AssistantContent };
+type PermissionRequestBusEvent = {
+	source?: string;
+	requestId?: string;
+	state?: string;
+};
 
 const hiddenAssistantType = OPENVIBES_MASK_CUSTOM_TYPE;
 const maskedOriginalContentKey = Symbol("openvibes.originalAssistantContent");
@@ -38,6 +43,10 @@ export default function (pi: ExtensionAPI) {
 	let settings: OpenVibesSettings = { ...defaultOpenVibesSettings };
 	let animations: OpenVibesAnimation[] = [];
 	let overlay: OverlayState | undefined;
+	let overlayStartPromise: Promise<void> | undefined;
+	let uiContext: ExtensionContext | undefined;
+	const activePermissionRequests = new Set<string>();
+	let overlayRestartRequested = false;
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
 	let agentRunning = false;
 
@@ -133,56 +142,104 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
+	const clearOverlay = (): void => {
+		overlay?.close?.();
+		overlay = undefined;
+		uiContext?.ui.setWorkingVisible?.(true);
+	};
+
+	const requestOverlayRestart = (): void => {
+		overlayRestartRequested = true;
+		if (!uiContext || !settings.enabled || !agentRunning || hasPendingPermissionRequest()) return;
+		if (overlayStartPromise || overlay) return;
+		overlayRestartRequested = false;
+		void startOverlay(uiContext);
+	};
+
+	const hasPendingPermissionRequest = (): boolean => activePermissionRequests.size > 0;
+
+	const handlePermissionRequestEvent = (data: unknown): void => {
+		if (!data || typeof data !== "object") return;
+		const event = data as PermissionRequestBusEvent;
+		const requestId = event.requestId?.trim();
+		if (!requestId) return;
+
+		if (event.state === "waiting") {
+			activePermissionRequests.add(requestId);
+			if (overlay) {
+				clearOverlay();
+			}
+			overlayRestartRequested = true;
+			return;
+		}
+
+		if (event.state === "approved" || event.state === "denied") {
+			activePermissionRequests.delete(requestId);
+			requestOverlayRestart();
+		}
+	};
+
 	const pulseOverlay = (mode: "flash" | "settle"): void => {
 		overlay?.component?.pulse(mode);
 	};
 
 	const startOverlay = async (ctx: ExtensionContext): Promise<void> => {
-		if (!ctx.hasUI || !settings.enabled || overlay) return;
-		const animation = getSelectedAnimation();
-		if (!animation) return;
-		let player;
-		try {
-			player = await loadOpenVibesAnimation(animation.path);
-		} catch (error) {
-			ctx.ui.notify(`Failed to load OpenVibes animation ${animation.name}: ${error}`, "error");
-			return;
-		}
-		if (!ctx.hasUI) return;
+		if (!ctx.hasUI || !settings.enabled || overlay || overlayStartPromise) return;
 
-		let closeFn: (() => void) | undefined;
-		overlay = { close: undefined, promise: undefined, component: undefined };
-		try {
-			overlay.promise = ctx.ui.custom(
-				(tui, theme, _keybindings, done) => {
-					closeFn = () => done(undefined);
-					overlay!.close = closeFn;
-					const component = new MilliOverlayComponent(tui, player);
-					overlay!.component = component;
-					return component;
-				},
-				{
-					overlay: true,
-					overlayOptions: {
-						anchor: "center",
-						width: "100%",
-						maxHeight: "100%",
-						margin: 0,
+		overlayStartPromise = (async () => {
+			const animation = getSelectedAnimation();
+			if (!animation) return;
+			let player;
+			try {
+				player = await loadOpenVibesAnimation(animation.path);
+			} catch (error) {
+				ctx.ui.notify(`Failed to load OpenVibes animation ${animation.name}: ${error}`, "error");
+				return;
+			}
+			if (!ctx.hasUI || hasPendingPermissionRequest()) return;
+
+			let closeFn: (() => void) | undefined;
+			overlay = { close: undefined, promise: undefined, component: undefined };
+			try {
+				overlay.promise = ctx.ui.custom(
+					(tui, theme, _keybindings, done) => {
+						closeFn = () => done(undefined);
+						overlay!.close = closeFn;
+						const component = new MilliOverlayComponent(tui, player);
+						overlay!.component = component;
+						return component;
 					},
-				},
-			);
-		} catch (error) {
-			overlay = undefined;
-			throw error;
-		}
-		ctx.ui.setWorkingVisible?.(false);
-		const overlayPromise = overlay.promise;
-		if (!overlayPromise) return;
-		void overlayPromise.catch(() => undefined).finally(() => {
-			if (overlay?.close === closeFn) {
+					{
+						overlay: true,
+						overlayOptions: {
+							anchor: "center",
+							width: "100%",
+							maxHeight: "100%",
+							margin: 0,
+						},
+					},
+				);
+			} catch (error) {
 				overlay = undefined;
+				throw error;
+			}
+			ctx.ui.setWorkingVisible?.(false);
+			const overlayPromise = overlay.promise;
+			if (!overlayPromise) return;
+			void overlayPromise.catch(() => undefined).finally(() => {
+				if (overlay?.close === closeFn) {
+					overlay = undefined;
+				}
+			});
+		})().finally(() => {
+			overlayStartPromise = undefined;
+			if (overlayRestartRequested && uiContext && settings.enabled && agentRunning && !hasPendingPermissionRequest() && !overlay) {
+				overlayRestartRequested = false;
+				void startOverlay(uiContext);
 			}
 		});
+
+		await overlayStartPromise;
 	};
 
 	const maskAssistantMessage = (message: AssistantMessageLike): void => {
@@ -326,6 +383,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		uiContext = ctx;
+		activePermissionRequests.clear();
+		overlayRestartRequested = false;
 		settings = await readSettings();
 		agentRunning = false;
 		await refreshAnimations();
@@ -334,20 +394,28 @@ export default function (pi: ExtensionAPI) {
 		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
 	});
 
+	pi.events.on("pi-permission-system:permission-request", handlePermissionRequestEvent);
+
 	(pi.on as any)("context", async (event: { messages: SessionMessage[] }) => {
 		return { messages: unmaskContextMessages(event.messages) };
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {
+		uiContext = ctx;
+		overlayRestartRequested = false;
 		agentRunning = true;
 		if (settings.enabled) {
-			await startOverlay(ctx);
+			void startOverlay(ctx);
 		}
 		showStatus(ctx, settings.enabled ? formatStatusLine("casting") : `OpenVibes off · ${getMaskingLabel()}`);
 	});
 
 	(pi.on as any)("tool_execution_start", async (event: { tool?: { name?: string } }, ctx: ExtensionContext) => {
+		uiContext = ctx;
 		if (!settings.enabled) return;
+		if (!overlay && !overlayStartPromise && !hasPendingPermissionRequest()) {
+			void startOverlay(ctx);
+		}
 		pulseOverlay("flash");
 		const toolName = event.tool?.name ? ` · ${event.tool.name}` : "";
 		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · casting${toolName} · ${getMaskingLabel()}`);
@@ -377,13 +445,19 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
+		uiContext = ctx;
 		agentRunning = false;
+		activePermissionRequests.clear();
+		overlayRestartRequested = false;
 		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
 		closeOverlay(ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		uiContext = ctx;
 		agentRunning = false;
+		activePermissionRequests.clear();
+		overlayRestartRequested = false;
 		closeOverlay(ctx);
 	});
 }
