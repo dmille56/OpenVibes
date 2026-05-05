@@ -17,7 +17,7 @@ import { discoverOpenVibesAnimations, loadOpenVibesAnimation } from "./animation
 type AssistantContent = any;
 
 type SessionMessage = { role: string; [key: string]: any };
-type AssistantMessageLike = SessionMessage & { role: "assistant"; content: AssistantContent };
+type AssistantMessageLike = SessionMessage & { role: string; content: AssistantContent };
 type PermissionRequestBusEvent = {
 	source?: string;
 	requestId?: string;
