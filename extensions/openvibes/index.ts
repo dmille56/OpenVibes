@@ -31,6 +31,7 @@ type MaskedAssistantMessage = AssistantMessageLike & {
 interface OverlayState {
 	close: (() => void) | undefined;
 	promise: Promise<unknown> | undefined;
+	component: MilliOverlayComponent | undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -75,6 +76,12 @@ export default function (pi: ExtensionAPI) {
 			.join("");
 	};
 
+	const getMaskingLabel = (): string => (settings.maskAssistantOutput ? "masking on" : "masking off");
+
+	const formatStatusLine = (state: string): string => {
+		return `OpenVibes ${settings.enabled ? "on" : "off"} (${settings.selectedAnimation}) · ${state} · ${getMaskingLabel()}`;
+	};
+
 	const getSelectedAnimation = (): OpenVibesAnimation | undefined => {
 		return animations.find((item) => item.name === settings.selectedAnimation) ?? animations[0];
 	};
@@ -103,12 +110,16 @@ export default function (pi: ExtensionAPI) {
 		const animationLabel = selected ? `${selected.name} (${selected.source === "user" ? "user" : "bundled"})` : "none";
 		return [
 			`OpenVibes: ${settings.enabled ? "on" : "off"}`,
+			`Masking: ${settings.maskAssistantOutput ? "on" : "off"}`,
 			`Animation: ${animationLabel}`,
 			"",
 			"Usage:",
 			"  /openvibes on",
 			"  /openvibes off",
 			"  /openvibes toggle",
+			"  /openvibes mask on",
+			"  /openvibes mask off",
+			"  /openvibes mask toggle",
 			"  /openvibes list",
 			"  /openvibes select <name>",
 		].join("\n");
@@ -120,6 +131,10 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.hasUI) {
 			ctx.ui.setWorkingVisible?.(true);
 		}
+	};
+
+	const pulseOverlay = (mode: "flash" | "settle"): void => {
+		overlay?.component?.pulse(mode);
 	};
 
 	const startOverlay = async (ctx: ExtensionContext): Promise<void> => {
@@ -136,13 +151,15 @@ export default function (pi: ExtensionAPI) {
 		if (!ctx.hasUI) return;
 
 		let closeFn: (() => void) | undefined;
-		overlay = { close: undefined, promise: undefined };
+		overlay = { close: undefined, promise: undefined, component: undefined };
 		try {
 			overlay.promise = ctx.ui.custom(
 				(tui, theme, _keybindings, done) => {
 					closeFn = () => done(undefined);
 					overlay!.close = closeFn;
-					return new MilliOverlayComponent(tui, player);
+					const component = new MilliOverlayComponent(tui, player);
+					overlay!.component = component;
+					return component;
 				},
 				{
 					overlay: true,
@@ -159,7 +176,9 @@ export default function (pi: ExtensionAPI) {
 			throw error;
 		}
 		ctx.ui.setWorkingVisible?.(false);
-		void overlay.promise.catch(() => undefined).finally(() => {
+		const overlayPromise = overlay.promise;
+		if (!overlayPromise) return;
+		void overlayPromise.catch(() => undefined).finally(() => {
 			if (overlay?.close === closeFn) {
 				overlay = undefined;
 			}
@@ -167,8 +186,16 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const maskAssistantMessage = (message: AssistantMessageLike): void => {
-		if (!settings.enabled) return;
 		const maskedMessage = message as MaskedAssistantMessage;
+		if (!settings.maskAssistantOutput) {
+			const originalContent = maskedMessage[maskedOriginalContentKey];
+			if (originalContent !== undefined) {
+				message.content = originalContent;
+			}
+			return;
+		}
+		if (!settings.enabled) return;
+
 		let originalContent = maskedMessage[maskedOriginalContentKey];
 		if (originalContent === undefined) {
 			originalContent = cloneContent(message.content);
@@ -222,7 +249,7 @@ export default function (pi: ExtensionAPI) {
 				settings.enabled = !settings.enabled;
 				await persistSettings();
 				setEditor(ctx);
-				showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation})` : "OpenVibes off");
+				showStatus(ctx, settings.enabled ? formatStatusLine(agentRunning ? "casting" : "idle") : `OpenVibes off · ${getMaskingLabel()}`);
 				ctx.ui.notify(`OpenVibes ${settings.enabled ? "enabled" : "disabled"}`, "info");
 				return;
 			}
@@ -231,7 +258,7 @@ export default function (pi: ExtensionAPI) {
 				settings.enabled = true;
 				await persistSettings();
 				setEditor(ctx);
-				showStatus(ctx, `OpenVibes on (${settings.selectedAnimation})`);
+				showStatus(ctx, formatStatusLine(agentRunning ? "casting" : "idle"));
 				ctx.ui.notify("OpenVibes enabled", "info");
 				return;
 			}
@@ -240,7 +267,7 @@ export default function (pi: ExtensionAPI) {
 				settings.enabled = false;
 				await persistSettings();
 				setEditor(ctx);
-				showStatus(ctx, "OpenVibes off");
+				showStatus(ctx, `OpenVibes off · ${getMaskingLabel()}`);
 				ctx.ui.notify("OpenVibes disabled", "info");
 				closeOverlay(ctx);
 				return;
@@ -267,12 +294,34 @@ export default function (pi: ExtensionAPI) {
 				}
 				settings.selectedAnimation = choice;
 				await persistSettings();
-				showStatus(ctx, `OpenVibes on (${settings.selectedAnimation})`);
+				showStatus(ctx, formatStatusLine(agentRunning ? "casting" : "idle"));
 				ctx.ui.notify(`Selected ${choice}`, "info");
 				return;
 			}
 
-			ctx.ui.notify("Usage: /openvibes [status|on|off|toggle|list|select <name>]", "warning");
+			if (action === "mask") {
+				const [mode] = rest;
+				if (!mode || mode === "status") {
+					ctx.ui.notify(`Masking is ${settings.maskAssistantOutput ? "on" : "off"}`, "info");
+					return;
+				}
+				if (mode === "toggle") {
+					settings.maskAssistantOutput = !settings.maskAssistantOutput;
+				} else if (mode === "on") {
+					settings.maskAssistantOutput = true;
+				} else if (mode === "off") {
+					settings.maskAssistantOutput = false;
+				} else {
+					ctx.ui.notify("Usage: /openvibes mask [status|on|off|toggle]", "warning");
+					return;
+				}
+				await persistSettings();
+				showStatus(ctx, settings.enabled ? formatStatusLine(agentRunning ? "casting" : "idle") : `OpenVibes off · ${getMaskingLabel()}`);
+				ctx.ui.notify(`Masking ${settings.maskAssistantOutput ? "enabled" : "disabled"}`, "info");
+				return;
+			}
+
+			ctx.ui.notify("Usage: /openvibes [status|on|off|toggle|mask <mode>|list|select <name>]", "warning");
 		},
 	});
 
@@ -282,7 +331,7 @@ export default function (pi: ExtensionAPI) {
 		await refreshAnimations();
 		restoreBranchQueue(ctx);
 		setEditor(ctx);
-		showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation})` : "OpenVibes off");
+		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
 	});
 
 	(pi.on as any)("context", async (event: { messages: SessionMessage[] }) => {
@@ -294,28 +343,42 @@ export default function (pi: ExtensionAPI) {
 		if (settings.enabled) {
 			await startOverlay(ctx);
 		}
-		showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation}) · casting` : "OpenVibes off");
+		showStatus(ctx, settings.enabled ? formatStatusLine("casting") : `OpenVibes off · ${getMaskingLabel()}`);
+	});
+
+	(pi.on as any)("tool_execution_start", async (event: { tool?: { name?: string } }, ctx: ExtensionContext) => {
+		if (!settings.enabled) return;
+		pulseOverlay("flash");
+		const toolName = event.tool?.name ? ` · ${event.tool.name}` : "";
+		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · casting${toolName} · ${getMaskingLabel()}`);
+	});
+
+	(pi.on as any)("tool_execution_end", async (event: { tool?: { name?: string } }, ctx: ExtensionContext) => {
+		if (!settings.enabled) return;
+		pulseOverlay("settle");
+		const toolName = event.tool?.name ? ` · ${event.tool.name}` : "";
+		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · settling${toolName} · ${getMaskingLabel()}`);
 	});
 
 	pi.on("message_start", async (event) => {
-		if (!settings.enabled || event.message.role !== "assistant") return;
+		if (event.message.role !== "assistant") return;
 		maskAssistantMessage(event.message);
 	});
 
 	pi.on("message_update", async (event) => {
-		if (!settings.enabled || event.message.role !== "assistant") return;
+		if (event.message.role !== "assistant") return;
 		maskAssistantMessage(event.message);
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		if (!settings.enabled || event.message.role !== "assistant") return;
+		if (event.message.role !== "assistant") return;
 		maskAssistantMessage(event.message);
-		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · ${agentRunning ? "casting" : "idle"}`);
+		showStatus(ctx, formatStatusLine(agentRunning ? "casting" : "idle"));
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
 		agentRunning = false;
-		showStatus(ctx, settings.enabled ? `OpenVibes on (${settings.selectedAnimation}) · idle` : "OpenVibes off");
+		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
 		closeOverlay(ctx);
 	});
 

@@ -8,6 +8,7 @@ export const OPENVIBES_MASK_CUSTOM_TYPE = "openvibes:assistant-mask";
 
 export interface OpenVibesSettings {
 	enabled: boolean;
+	maskAssistantOutput: boolean;
 	selectedAnimation: string;
 }
 
@@ -19,6 +20,7 @@ export interface OpenVibesAnimation {
 
 export const defaultOpenVibesSettings: OpenVibesSettings = {
 	enabled: true,
+	maskAssistantOutput: true,
 	selectedAnimation: "ai_genie",
 };
 
@@ -45,6 +47,10 @@ export async function readSettings(): Promise<OpenVibesSettings> {
 		const parsed = JSON.parse(raw) as Partial<OpenVibesSettings>;
 		return {
 			enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : defaultOpenVibesSettings.enabled,
+			maskAssistantOutput:
+				typeof parsed.maskAssistantOutput === "boolean"
+					? parsed.maskAssistantOutput
+					: defaultOpenVibesSettings.maskAssistantOutput,
 			selectedAnimation:
 				typeof parsed.selectedAnimation === "string" && parsed.selectedAnimation.trim()
 					? parsed.selectedAnimation.trim()
