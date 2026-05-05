@@ -1,4 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { Component } from "@mariozechner/pi-tui";
+import { CommandBurstOverlayComponent } from "./command-burst-overlay.js";
 import { MilliOverlayComponent } from "./milli-overlay.js";
 import { WandTrailEditor } from "./wand-editor.js";
 import {
@@ -36,7 +38,7 @@ type MaskedAssistantMessage = AssistantMessageLike & {
 interface OverlayState {
 	close: (() => void) | undefined;
 	promise: Promise<unknown> | undefined;
-	component: MilliOverlayComponent | undefined;
+	component: Component | undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -44,9 +46,12 @@ export default function (pi: ExtensionAPI) {
 	let animations: OpenVibesAnimation[] = [];
 	let overlay: OverlayState | undefined;
 	let overlayStartPromise: Promise<void> | undefined;
+	let commandBurstOverlay: OverlayState | undefined;
+	let commandBurstStartPromise: Promise<void> | undefined;
 	let uiContext: ExtensionContext | undefined;
 	const activePermissionRequests = new Set<string>();
 	let overlayRestartRequested = false;
+	let commandFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
 	let agentRunning = false;
 
@@ -112,6 +117,85 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.hasUI) {
 			ctx.ui.setStatus("openvibes", text);
 		}
+	};
+
+	const clearCommandFeedbackTimer = (): void => {
+		if (!commandFeedbackTimer) return;
+		clearTimeout(commandFeedbackTimer);
+		commandFeedbackTimer = undefined;
+	};
+
+	const pulseCommandFeedback = (ctx: ExtensionContext, title: string): void => {
+		if (!ctx.hasUI) return;
+		clearCommandFeedbackTimer();
+		ctx.ui.setStatus("openvibes", `✦ ${title} ✦`);
+		commandFeedbackTimer = setTimeout(() => {
+			commandFeedbackTimer = undefined;
+			if (!uiContext) return;
+			showStatus(uiContext, settings.enabled ? formatStatusLine(agentRunning ? "casting" : "idle") : `OpenVibes off · ${getMaskingLabel()}`);
+		}, 1100);
+	};
+
+	const closeCommandBurstOverlay = (ctx: ExtensionContext): void => {
+		commandBurstOverlay?.close?.();
+		commandBurstOverlay = undefined;
+	};
+
+	const startCommandBurstOverlay = async (
+		ctx: ExtensionContext,
+		message: { title: string; subtitle: string; mode: "flash" | "settle" },
+	): Promise<void> => {
+		if (!ctx.hasUI || commandBurstOverlay || commandBurstStartPromise) return;
+
+		commandBurstStartPromise = (async () => {
+			let closeFn: (() => void) | undefined;
+			commandBurstOverlay = { close: undefined, promise: undefined, component: undefined };
+			try {
+				commandBurstOverlay.promise = ctx.ui.custom(
+					(tui, theme, _keybindings, done) => {
+						closeFn = () => done(undefined);
+						commandBurstOverlay!.close = closeFn;
+						const component = new CommandBurstOverlayComponent(tui, message.title, message.subtitle, message.mode);
+						commandBurstOverlay!.component = component;
+						return component;
+					},
+					{
+						overlay: true,
+						overlayOptions: {
+							anchor: "center",
+							width: "100%",
+							maxHeight: "100%",
+							margin: 0,
+						},
+					},
+				);
+			} catch (error) {
+				commandBurstOverlay = undefined;
+				throw error;
+			}
+			const burstPromise = commandBurstOverlay.promise;
+			if (!burstPromise) return;
+			void burstPromise.catch(() => undefined).finally(() => {
+				if (commandBurstOverlay?.close === closeFn) {
+					commandBurstOverlay = undefined;
+				}
+			});
+			setTimeout(() => closeFn?.(), 1050);
+		})().finally(() => {
+			commandBurstStartPromise = undefined;
+		});
+
+		await commandBurstStartPromise;
+	};
+
+	const getBurstMessage = (action: string): { title: string; subtitle: string; mode: "flash" | "settle" } => {
+		if (action === "off") {
+			return { title: "OPENVIBES DIMS", subtitle: "the veil closes", mode: "settle" };
+		}
+		if (action === "toggle" && !settings.enabled) {
+			return { title: "OPENVIBES DIMS", subtitle: "the veil closes", mode: "settle" };
+		}
+		return { title: "OPENVIBES AWAKENS", subtitle: "the veil stirs", mode: "flash" };
 	};
 
 	const formatStatusHelp = (): string => {
@@ -180,7 +264,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const pulseOverlay = (mode: "flash" | "settle"): void => {
-		overlay?.component?.pulse(mode);
+		(overlay?.component as { pulse?: (mode: "flash" | "settle") => void } | undefined)?.pulse?.(mode);
 	};
 
 	const startOverlay = async (ctx: ExtensionContext): Promise<void> => {
@@ -306,7 +390,9 @@ export default function (pi: ExtensionAPI) {
 				settings.enabled = !settings.enabled;
 				await persistSettings();
 				setEditor(ctx);
-				showStatus(ctx, settings.enabled ? formatStatusLine(agentRunning ? "casting" : "idle") : `OpenVibes off · ${getMaskingLabel()}`);
+				void startCommandBurstOverlay(ctx, getBurstMessage("toggle"));
+				pulseCommandFeedback(ctx, settings.enabled ? "OPENVIBES AWAKENS" : "OPENVIBES DIMS");
+				pulseOverlay(settings.enabled ? "flash" : "settle");
 				ctx.ui.notify(`OpenVibes ${settings.enabled ? "enabled" : "disabled"}`, "info");
 				return;
 			}
@@ -315,7 +401,9 @@ export default function (pi: ExtensionAPI) {
 				settings.enabled = true;
 				await persistSettings();
 				setEditor(ctx);
-				showStatus(ctx, formatStatusLine(agentRunning ? "casting" : "idle"));
+				void startCommandBurstOverlay(ctx, getBurstMessage("on"));
+				pulseCommandFeedback(ctx, "OPENVIBES AWAKENS");
+				pulseOverlay("flash");
 				ctx.ui.notify("OpenVibes enabled", "info");
 				return;
 			}
@@ -324,7 +412,9 @@ export default function (pi: ExtensionAPI) {
 				settings.enabled = false;
 				await persistSettings();
 				setEditor(ctx);
-				showStatus(ctx, `OpenVibes off · ${getMaskingLabel()}`);
+				void startCommandBurstOverlay(ctx, getBurstMessage("off"));
+				pulseCommandFeedback(ctx, "OPENVIBES DIMS");
+				pulseOverlay("settle");
 				ctx.ui.notify("OpenVibes disabled", "info");
 				closeOverlay(ctx);
 				return;
@@ -386,6 +476,8 @@ export default function (pi: ExtensionAPI) {
 		uiContext = ctx;
 		activePermissionRequests.clear();
 		overlayRestartRequested = false;
+		clearCommandFeedbackTimer();
+		closeCommandBurstOverlay(ctx);
 		settings = await readSettings();
 		agentRunning = false;
 		await refreshAnimations();
@@ -449,6 +541,8 @@ export default function (pi: ExtensionAPI) {
 		agentRunning = false;
 		activePermissionRequests.clear();
 		overlayRestartRequested = false;
+		clearCommandFeedbackTimer();
+		closeCommandBurstOverlay(ctx);
 		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
 		closeOverlay(ctx);
 	});
@@ -458,6 +552,8 @@ export default function (pi: ExtensionAPI) {
 		agentRunning = false;
 		activePermissionRequests.clear();
 		overlayRestartRequested = false;
+		clearCommandFeedbackTimer();
+		closeCommandBurstOverlay(ctx);
 		closeOverlay(ctx);
 	});
 }
