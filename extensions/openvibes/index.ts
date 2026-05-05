@@ -51,6 +51,7 @@ export default function (pi: ExtensionAPI) {
 	let uiContext: ExtensionContext | undefined;
 	const activePermissionRequests = new Set<string>();
 	let overlayRestartRequested = false;
+	let shutdownBurstShown = false;
 	let commandFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
 	let agentRunning = false;
@@ -196,6 +197,17 @@ export default function (pi: ExtensionAPI) {
 			return { title: "OPENVIBES DIMS", subtitle: "the veil closes", mode: "settle" };
 		}
 		return { title: "OPENVIBES AWAKENS", subtitle: "the veil stirs", mode: "flash" };
+	};
+
+	const triggerStartupBurst = (ctx: ExtensionContext): void => {
+		if (!ctx.hasUI || !settings.enabled) return;
+		void startCommandBurstOverlay(ctx, getBurstMessage("on"));
+	};
+
+	const triggerShutdownBurst = async (ctx: ExtensionContext): Promise<void> => {
+		if (!ctx.hasUI || !settings.enabled || shutdownBurstShown) return;
+		shutdownBurstShown = true;
+		await startCommandBurstOverlay(ctx, getBurstMessage("off"));
 	};
 
 	const formatStatusHelp = (): string => {
@@ -476,6 +488,7 @@ export default function (pi: ExtensionAPI) {
 		uiContext = ctx;
 		activePermissionRequests.clear();
 		overlayRestartRequested = false;
+		shutdownBurstShown = false;
 		clearCommandFeedbackTimer();
 		closeCommandBurstOverlay(ctx);
 		settings = await readSettings();
@@ -484,6 +497,7 @@ export default function (pi: ExtensionAPI) {
 		restoreBranchQueue(ctx);
 		setEditor(ctx);
 		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
+		triggerStartupBurst(ctx);
 	});
 
 	pi.events.on("pi-permission-system:permission-request", handlePermissionRequestEvent);
@@ -543,6 +557,7 @@ export default function (pi: ExtensionAPI) {
 		overlayRestartRequested = false;
 		clearCommandFeedbackTimer();
 		closeCommandBurstOverlay(ctx);
+		await triggerShutdownBurst(ctx);
 		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
 		closeOverlay(ctx);
 	});
