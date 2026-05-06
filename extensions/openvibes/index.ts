@@ -96,13 +96,6 @@ export default function (pi: ExtensionAPI) {
 			.join("");
 	};
 
-	const maskStringValue = (key: string, value: string): string => {
-		if (key === "text" || key === "thinking" || key === "output" || key === "result" || key === "partialArgs" || key === "command") {
-			return buildBinaryMask(value);
-		}
-		return value;
-	};
-
 	const maskVisibleContent = (content: AssistantContent, seen = new WeakMap<object, AssistantContent>()): AssistantContent => {
 		if (typeof content === "string") return buildBinaryMask(content);
 		if (typeof content === "number" || typeof content === "boolean" || content === null || content === undefined) return content;
@@ -123,15 +116,11 @@ export default function (pi: ExtensionAPI) {
 		seen.set(content, maskedRecord);
 
 		for (const [key, value] of Object.entries(record)) {
-			if (typeof value === "string") {
-				maskedRecord[key] = maskStringValue(key, value);
+			if (key === "text" || key === "thinking" || key === "output" || key === "result" || key === "content") {
+				maskedRecord[key] = typeof value === "string" ? buildBinaryMask(value) : maskVisibleContent(value, seen);
 				continue;
 			}
-			if (key === "content" || key === "parts" || key === "children") {
-				maskedRecord[key] = maskVisibleContent(value, seen);
-				continue;
-			}
-			if (value && typeof value === "object") {
+			if (key === "parts" || key === "children") {
 				maskedRecord[key] = maskVisibleContent(value, seen);
 				continue;
 			}
@@ -142,7 +131,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const shouldMaskMessage = (message: SessionMessage): boolean => {
-		return message.role === "assistant" || message.role === "toolResult" || message.role === "tool";
+		return message.role === "assistant";
 	};
 
 	const getMaskingLabel = (): string => (settings.maskAssistantOutput ? "masking on" : "masking off");
