@@ -96,7 +96,14 @@ export default function (pi: ExtensionAPI) {
 			.join("");
 	};
 
-	const maskAssistantContent = (content: AssistantContent, seen = new WeakMap<object, AssistantContent>()): AssistantContent => {
+	const maskStringValue = (key: string, value: string): string => {
+		if (key === "text" || key === "thinking" || key === "output" || key === "result" || key === "partialArgs" || key === "command") {
+			return buildBinaryMask(value);
+		}
+		return value;
+	};
+
+	const maskVisibleContent = (content: AssistantContent, seen = new WeakMap<object, AssistantContent>()): AssistantContent => {
 		if (typeof content === "string") return buildBinaryMask(content);
 		if (typeof content === "number" || typeof content === "boolean" || content === null || content === undefined) return content;
 		if (typeof content !== "object") return content;
@@ -105,7 +112,7 @@ export default function (pi: ExtensionAPI) {
 			const maskedArray: AssistantContent[] = [];
 			seen.set(content, maskedArray as AssistantContent);
 			for (const item of content) {
-				maskedArray.push(maskAssistantContent(item, seen));
+				maskedArray.push(maskVisibleContent(item, seen));
 			}
 			return maskedArray as AssistantContent;
 		}
@@ -116,22 +123,26 @@ export default function (pi: ExtensionAPI) {
 		seen.set(content, maskedRecord);
 
 		for (const [key, value] of Object.entries(record)) {
-			if (key === "text" && typeof value === "string") {
-				maskedRecord[key] = buildBinaryMask(value);
+			if (typeof value === "string") {
+				maskedRecord[key] = maskStringValue(key, value);
 				continue;
 			}
 			if (key === "content" || key === "parts" || key === "children") {
-				maskedRecord[key] = maskAssistantContent(value, seen);
+				maskedRecord[key] = maskVisibleContent(value, seen);
 				continue;
 			}
 			if (value && typeof value === "object") {
-				maskedRecord[key] = maskAssistantContent(value, seen);
+				maskedRecord[key] = maskVisibleContent(value, seen);
 				continue;
 			}
 			maskedRecord[key] = value;
 		}
 
 		return maskedRecord as AssistantContent;
+	};
+
+	const shouldMaskMessage = (message: SessionMessage): boolean => {
+		return message.role === "assistant" || message.role === "toolResult" || message.role === "tool";
 	};
 
 	const getMaskingLabel = (): string => (settings.maskAssistantOutput ? "masking on" : "masking off");
@@ -375,9 +386,9 @@ export default function (pi: ExtensionAPI) {
 		await overlayStartPromise;
 	};
 
-	const maskAssistantMessage = (message: AssistantMessageLike): void => {
+	const maskVisibleMessage = (message: SessionMessage): void => {
 		const maskedMessage = message as MaskedAssistantMessage;
-		if (!settings.maskAssistantOutput) {
+		if (!settings.maskAssistantOutput || !shouldMaskMessage(message)) {
 			const originalContent = maskedMessage[maskedOriginalContentKey];
 			if (originalContent !== undefined) {
 				message.content = originalContent;
@@ -394,7 +405,7 @@ export default function (pi: ExtensionAPI) {
 			assistantRestoreQueue.push(details);
 			pi.appendEntry(hiddenAssistantType, details);
 		}
-		message.content = maskAssistantContent(originalContent);
+		message.content = maskVisibleContent(originalContent);
 	};
 
 	const restoreBranchQueue = (ctx: ExtensionContext): void => {
@@ -414,7 +425,7 @@ export default function (pi: ExtensionAPI) {
 		const queue = [...assistantRestoreQueue];
 		for (const message of messages) {
 			restored.push(message);
-			if (message.role === "assistant") {
+			if (shouldMaskMessage(message)) {
 				const details = queue.shift();
 				if (details?.originalContent !== undefined) {
 					message.content = details.originalContent;
@@ -538,6 +549,11 @@ export default function (pi: ExtensionAPI) {
 
 	pi.events.on("pi-permission-system:permission-request", handlePermissionRequestEvent);
 
+	(pi.events.on as any)("message", async (event: { message?: SessionMessage }) => {
+		if (!event?.message) return;
+		maskVisibleMessage(event.message);
+	});
+
 	(pi.on as any)("context", async (event: { messages: SessionMessage[] }) => {
 		return { messages: unmaskContextMessages(event.messages) };
 	});
@@ -571,18 +587,15 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_start", async (event) => {
-		if (event.message.role !== "assistant") return;
-		maskAssistantMessage(event.message);
+		maskVisibleMessage(event.message);
 	});
 
 	pi.on("message_update", async (event) => {
-		if (event.message.role !== "assistant") return;
-		maskAssistantMessage(event.message);
+		maskVisibleMessage(event.message);
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		if (event.message.role !== "assistant") return;
-		maskAssistantMessage(event.message);
+		maskVisibleMessage(event.message);
 		showStatus(ctx, formatStatusLine(agentRunning ? "casting" : "idle"));
 	});
 
