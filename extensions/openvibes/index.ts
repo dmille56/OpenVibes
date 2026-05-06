@@ -53,6 +53,7 @@ export default function (pi: ExtensionAPI) {
 	let overlayRestartRequested = false;
 	let commandFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
+	let processedAssistantMessages = new WeakSet<object>();
 	let agentRunning = false;
 
 	const cloneContent = (content: AssistantContent): AssistantContent => structuredClone(content);
@@ -400,7 +401,7 @@ export default function (pi: ExtensionAPI) {
 		await overlayStartPromise;
 	};
 
-	const maskVisibleMessage = (message: SessionMessage): void => {
+	const maskVisibleMessage = (message: SessionMessage, phase: "live" | "final" = "live"): void => {
 		const maskedMessage = message as MaskedAssistantMessage;
 		if (!settings.maskAssistantOutput || !shouldMaskMessage(message)) {
 			const originalContent = maskedMessage[maskedOriginalContentKey];
@@ -410,6 +411,10 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (!settings.enabled) return;
+		if (phase === "live") return;
+		if (typeof message !== "object" || message === null) return;
+		if (processedAssistantMessages.has(message)) return;
+		processedAssistantMessages.add(message);
 		if (isMaskedContent(message.content)) return;
 
 		let originalContent = maskedMessage[maskedOriginalContentKey];
@@ -553,6 +558,7 @@ export default function (pi: ExtensionAPI) {
 		overlayRestartRequested = false;
 		clearCommandFeedbackTimer();
 		closeCommandBurstOverlay(ctx);
+		processedAssistantMessages = new WeakSet<object>();
 		settings = await readSettings();
 		agentRunning = false;
 		await refreshAnimations();
@@ -563,11 +569,6 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.events.on("pi-permission-system:permission-request", handlePermissionRequestEvent);
-
-	(pi.events.on as any)("message", async (event: { message?: SessionMessage }) => {
-		if (!event?.message) return;
-		maskVisibleMessage(event.message);
-	});
 
 	(pi.on as any)("context", async (event: { messages: SessionMessage[] }) => {
 		return { messages: unmaskContextMessages(event.messages) };
@@ -602,15 +603,15 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_start", async (event) => {
-		maskVisibleMessage(event.message);
+		maskVisibleMessage(event.message, "live");
 	});
 
 	pi.on("message_update", async (event) => {
-		maskVisibleMessage(event.message);
+		maskVisibleMessage(event.message, "live");
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		maskVisibleMessage(event.message);
+		maskVisibleMessage(event.message, "final");
 		showStatus(ctx, formatStatusLine(agentRunning ? "casting" : "idle"));
 	});
 
