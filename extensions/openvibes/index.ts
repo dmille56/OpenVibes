@@ -96,6 +96,31 @@ export default function (pi: ExtensionAPI) {
 			.join("");
 	};
 
+	const isMaskedText = (text: string): boolean => text.length === 0 || /^[01\s]+$/.test(text);
+
+	const isMaskedContent = (content: AssistantContent, seen = new WeakSet<object>()): boolean => {
+		if (typeof content === "string") return isMaskedText(content);
+		if (typeof content === "number" || typeof content === "boolean" || content === null || content === undefined) return true;
+		if (typeof content !== "object") return true;
+		if (Array.isArray(content)) {
+			if (seen.has(content)) return true;
+			seen.add(content);
+			return content.every((item) => isMaskedContent(item, seen));
+		}
+		if (seen.has(content)) return true;
+		seen.add(content);
+
+		const record = content as Record<string, unknown>;
+		const keysToCheck = ["text", "content", "parts", "children", "thinking", "output", "result"];
+		let checkedAny = false;
+		for (const key of keysToCheck) {
+			if (!(key in record)) continue;
+			checkedAny = true;
+			if (!isMaskedContent(record[key], seen)) return false;
+		}
+		return checkedAny;
+	};
+
 	const maskVisibleContent = (content: AssistantContent, seen = new WeakMap<object, AssistantContent>()): AssistantContent => {
 		if (typeof content === "string") return buildBinaryMask(content);
 		if (typeof content === "number" || typeof content === "boolean" || content === null || content === undefined) return content;
@@ -385,6 +410,7 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (!settings.enabled) return;
+		if (isMaskedContent(message.content)) return;
 
 		let originalContent = maskedMessage[maskedOriginalContentKey];
 		if (originalContent === undefined) {
