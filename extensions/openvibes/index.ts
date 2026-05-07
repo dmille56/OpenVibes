@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
+import { OpenVibesAudioManager } from "./audio.js";
 import { CommandBurstOverlayComponent } from "./command-burst-overlay.js";
 import { MilliOverlayComponent } from "./milli-overlay.js";
 import { WandTrailEditor } from "./wand-editor.js";
@@ -55,6 +56,11 @@ export default function (pi: ExtensionAPI) {
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
 	let processedAssistantMessages = new WeakSet<object>();
 	let agentRunning = false;
+	const audio = new OpenVibesAudioManager(
+		() => settings.soundEnabled,
+		() => settings.ambientEnabled,
+		() => settings.volume,
+	);
 
 	const cloneContent = (content: AssistantContent): AssistantContent => structuredClone(content);
 
@@ -164,6 +170,10 @@ export default function (pi: ExtensionAPI) {
 
 	const formatStatusLine = (state: string): string => {
 		return `OpenVibes ${settings.enabled ? "on" : "off"} (${settings.selectedAnimation}) · ${state} · ${getMaskingLabel()}`;
+	};
+
+	const formatAudioStatus = (): string => {
+		return `sound ${settings.soundEnabled ? "on" : "off"} · ambient ${settings.ambientEnabled ? "on" : "off"} · volume ${settings.volume.toFixed(2)}`;
 	};
 
 	const getSelectedAnimation = (): OpenVibesAnimation | undefined => {
@@ -279,6 +289,7 @@ export default function (pi: ExtensionAPI) {
 		return [
 			`OpenVibes: ${settings.enabled ? "on" : "off"}`,
 			`Masking: ${settings.maskAssistantOutput ? "on" : "off"}`,
+			`Audio: ${formatAudioStatus()}`,
 			`Animation: ${animationLabel}`,
 			"",
 			"Usage:",
@@ -288,9 +299,18 @@ export default function (pi: ExtensionAPI) {
 			"  /openvibes mask on",
 			"  /openvibes mask off",
 			"  /openvibes mask toggle",
+			"  /openvibes sound [status|on|off|toggle]",
+			"  /openvibes ambient [status|on|off|toggle]",
+			"  /openvibes volume <0-1>",
 			"  /openvibes list",
 			"  /openvibes select <name>",
 		].join("\n");
+	};
+
+	const parseVolume = (value: string): number | undefined => {
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed)) return undefined;
+		return Math.max(0, Math.min(1, parsed));
 	};
 
 	const closeOverlay = (ctx: ExtensionContext): void => {
@@ -325,6 +345,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (event.state === "waiting") {
 			activePermissionRequests.add(requestId);
+			audio.play("settle", { throttleMs: 120 });
 			if (overlay) {
 				clearOverlay();
 			}
@@ -334,6 +355,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (event.state === "approved" || event.state === "denied") {
 			activePermissionRequests.delete(requestId);
+			audio.play(event.state === "approved" ? "approve" : "deny", { throttleMs: 120 });
 			requestOverlayRestart();
 		}
 	};
@@ -399,6 +421,14 @@ export default function (pi: ExtensionAPI) {
 		});
 
 		await overlayStartPromise;
+	};
+
+	const syncAmbientAudio = async (): Promise<void> => {
+		if (settings.enabled && settings.soundEnabled && settings.ambientEnabled && agentRunning && !hasPendingPermissionRequest()) {
+			await audio.startAmbient();
+			return;
+		}
+		audio.stopAmbient();
 	};
 
 	const maskVisibleMessage = (message: SessionMessage, phase: "live" | "final" = "live"): void => {
@@ -467,28 +497,35 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (action === "toggle") {
+				const nextEnabled = !settings.enabled;
+				audio.play(nextEnabled ? "on" : "off");
 				settings.enabled = !settings.enabled;
 				await persistSettings();
 				setEditor(ctx);
 				void startCommandBurstOverlay(ctx, getBurstMessage("toggle"));
 				pulseCommandFeedback(ctx, settings.enabled ? "OPENVIBES AWAKENS" : "OPENVIBES DIMS");
 				pulseOverlay(settings.enabled ? "flash" : "settle");
+				if (!settings.enabled) audio.stopAmbient();
+				else void syncAmbientAudio();
 				ctx.ui.notify(`OpenVibes ${settings.enabled ? "enabled" : "disabled"}`, "info");
 				return;
 			}
 
 			if (action === "on") {
+				audio.play("on");
 				settings.enabled = true;
 				await persistSettings();
 				setEditor(ctx);
 				void startCommandBurstOverlay(ctx, getBurstMessage("on"));
 				pulseCommandFeedback(ctx, "OPENVIBES AWAKENS");
 				pulseOverlay("flash");
+				void syncAmbientAudio();
 				ctx.ui.notify("OpenVibes enabled", "info");
 				return;
 			}
 
 			if (action === "off") {
+				audio.play("off");
 				settings.enabled = false;
 				await persistSettings();
 				setEditor(ctx);
@@ -496,7 +533,72 @@ export default function (pi: ExtensionAPI) {
 				pulseCommandFeedback(ctx, "OPENVIBES DIMS");
 				pulseOverlay("settle");
 				ctx.ui.notify("OpenVibes disabled", "info");
+				audio.stopAmbient();
 				closeOverlay(ctx);
+				return;
+			}
+
+			if (action === "sound") {
+				const [mode] = rest;
+				if (!mode || mode === "status") {
+					ctx.ui.notify(`Sound is ${settings.soundEnabled ? "on" : "off"} (${formatAudioStatus()})`, "info");
+					return;
+				}
+				if (mode === "toggle") {
+					settings.soundEnabled = !settings.soundEnabled;
+				} else if (mode === "on") {
+					settings.soundEnabled = true;
+				} else if (mode === "off") {
+					settings.soundEnabled = false;
+				} else {
+					ctx.ui.notify("Usage: /openvibes sound [status|on|off|toggle]", "warning");
+					return;
+				}
+				await persistSettings();
+				if (!settings.soundEnabled) audio.stopAmbient();
+				else void syncAmbientAudio();
+				ctx.ui.notify(`Sound ${settings.soundEnabled ? "enabled" : "disabled"}`, "info");
+				return;
+			}
+
+			if (action === "ambient") {
+				const [mode] = rest;
+				if (!mode || mode === "status") {
+					ctx.ui.notify(`Ambient is ${settings.ambientEnabled ? "on" : "off"}`, "info");
+					return;
+				}
+				if (mode === "toggle") {
+					settings.ambientEnabled = !settings.ambientEnabled;
+				} else if (mode === "on") {
+					settings.ambientEnabled = true;
+				} else if (mode === "off") {
+					settings.ambientEnabled = false;
+				} else {
+					ctx.ui.notify("Usage: /openvibes ambient [status|on|off|toggle]", "warning");
+					return;
+				}
+				await persistSettings();
+				if (!settings.ambientEnabled) audio.stopAmbient();
+				else void syncAmbientAudio();
+				ctx.ui.notify(`Ambient ${settings.ambientEnabled ? "enabled" : "disabled"}`, "info");
+				return;
+			}
+
+			if (action === "volume") {
+				const [value] = rest;
+				if (!value) {
+					ctx.ui.notify(`Usage: /openvibes volume <0-1> (current ${settings.volume.toFixed(2)})`, "warning");
+					return;
+				}
+				const volume = parseVolume(value);
+				if (volume === undefined) {
+					ctx.ui.notify("Usage: /openvibes volume <0-1>", "warning");
+					return;
+				}
+				settings.volume = volume;
+				audio.setVolume(volume);
+				await persistSettings();
+				ctx.ui.notify(`Volume set to ${settings.volume.toFixed(2)}`, "info");
 				return;
 			}
 
@@ -548,7 +650,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			ctx.ui.notify("Usage: /openvibes [status|on|off|toggle|mask <mode>|list|select <name>]", "warning");
+			ctx.ui.notify("Usage: /openvibes [status|on|off|toggle|mask <mode>|sound <mode>|ambient <mode>|volume <0-1>|list|select <name>]", "warning");
 		},
 	});
 
@@ -565,6 +667,7 @@ export default function (pi: ExtensionAPI) {
 		restoreBranchQueue(ctx);
 		setEditor(ctx);
 		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
+		audio.play("wake");
 		triggerStartupBurst(ctx);
 	});
 
@@ -581,12 +684,15 @@ export default function (pi: ExtensionAPI) {
 		if (settings.enabled) {
 			void startOverlay(ctx);
 		}
+		audio.play("agent-start");
+		void syncAmbientAudio();
 		showStatus(ctx, settings.enabled ? formatStatusLine("casting") : `OpenVibes off · ${getMaskingLabel()}`);
 	});
 
 	(pi.on as any)("tool_execution_start", async (event: { tool?: { name?: string } }, ctx: ExtensionContext) => {
 		uiContext = ctx;
 		if (!settings.enabled) return;
+		audio.play("tool-tick", { throttleMs: 180 });
 		if (!overlay && !overlayStartPromise && !hasPendingPermissionRequest()) {
 			void startOverlay(ctx);
 		}
@@ -597,6 +703,7 @@ export default function (pi: ExtensionAPI) {
 
 	(pi.on as any)("tool_execution_end", async (event: { tool?: { name?: string } }, ctx: ExtensionContext) => {
 		if (!settings.enabled) return;
+		audio.play("success", { throttleMs: 180 });
 		pulseOverlay("settle");
 		const toolName = event.tool?.name ? ` · ${event.tool.name}` : "";
 		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · settling${toolName} · ${getMaskingLabel()}`);
@@ -622,6 +729,8 @@ export default function (pi: ExtensionAPI) {
 		overlayRestartRequested = false;
 		clearCommandFeedbackTimer();
 		closeCommandBurstOverlay(ctx);
+		audio.play("settle");
+		audio.stopAmbient();
 		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
 		closeOverlay(ctx);
 	});
@@ -633,6 +742,8 @@ export default function (pi: ExtensionAPI) {
 		overlayRestartRequested = false;
 		clearCommandFeedbackTimer();
 		closeCommandBurstOverlay(ctx);
+		audio.play("shutdown");
+		audio.dispose();
 		closeOverlay(ctx);
 	});
 }

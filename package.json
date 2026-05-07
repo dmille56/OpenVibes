@@ -17,7 +17,9 @@
   "files": [
     "extensions",
     "images/**/*.milli",
+    "sounds/**/*",
     "README.md",
+    "OPENVIBES_SOUND_IMPLEMENTATION_PLAN.md",
     "OPENVIBES_IMPLEMENTATION_PLAN.md"
   ],
   "scripts": {

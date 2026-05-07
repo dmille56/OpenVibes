@@ -10,6 +10,9 @@ export interface OpenVibesSettings {
 	enabled: boolean;
 	maskAssistantOutput: boolean;
 	selectedAnimation: string;
+	soundEnabled: boolean;
+	ambientEnabled: boolean;
+	volume: number;
 }
 
 export interface OpenVibesAnimation {
@@ -22,6 +25,9 @@ export const defaultOpenVibesSettings: OpenVibesSettings = {
 	enabled: true,
 	maskAssistantOutput: true,
 	selectedAnimation: "ai_genie",
+	soundEnabled: true,
+	ambientEnabled: true,
+	volume: 0.3,
 };
 
 export function getOpenVibesPackageRoot(): string {
@@ -41,6 +47,15 @@ export function getOpenVibesAnimationDir(): string {
 	return path.join(getOpenVibesConfigRoot(), "animations");
 }
 
+export function getOpenVibesSoundDir(): string {
+	return path.join(getOpenVibesPackageRoot(), "sounds");
+}
+
+function normalizeVolume(volume: unknown): number {
+	if (typeof volume !== "number" || !Number.isFinite(volume)) return defaultOpenVibesSettings.volume;
+	return Math.min(1, Math.max(0, volume));
+}
+
 export async function readSettings(): Promise<OpenVibesSettings> {
 	try {
 		const raw = await fs.readFile(getOpenVibesStatePath(), "utf8");
@@ -55,6 +70,9 @@ export async function readSettings(): Promise<OpenVibesSettings> {
 				typeof parsed.selectedAnimation === "string" && parsed.selectedAnimation.trim()
 					? parsed.selectedAnimation.trim()
 					: defaultOpenVibesSettings.selectedAnimation,
+			soundEnabled: typeof parsed.soundEnabled === "boolean" ? parsed.soundEnabled : defaultOpenVibesSettings.soundEnabled,
+			ambientEnabled: typeof parsed.ambientEnabled === "boolean" ? parsed.ambientEnabled : defaultOpenVibesSettings.ambientEnabled,
+			volume: normalizeVolume(parsed.volume),
 		};
 	} catch {
 		return { ...defaultOpenVibesSettings };
