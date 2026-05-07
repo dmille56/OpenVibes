@@ -111,10 +111,6 @@ OpenVibes also plays a restrained sound layer: a wake chime on session start, an
 
 If `pi-permission-system` opens an approval dialog, the overlay steps out of the way until the request resolves.
 
-## Why This Exists
-
-Why does this exist?  Good question.
-
 ## Troubleshooting
 
 - If the overlay does not appear, confirm the extension is enabled with `/openvibes on` and that the session has UI available.
