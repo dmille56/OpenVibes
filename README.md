@@ -6,22 +6,16 @@
 
 ## Overview
 
-[Pi](https://pi.dev/) enabled genie assistant.
+Sick of all those boring coding agents that kill your vibe? OpenVibes has a solution for you!  Enabled by [Pi](https://pi.dev/).  
 
 ## Features
 
-- Shows a fullscreen overlay during agent runs.
-- Pauses the overlay while permission prompts are open.
-- Adds a wand-like trail in the prompt editor while typing.
-- Adds short spark bursts and state-driven editor/border/status effects.
-- Lets you toggle OpenVibes on and off.
-- Lets you toggle assistant masking.
-- Lets you choose the active overlay animation.
-- Plays bundled sound cues for session, agent, tool, permission, and shutdown events.
-- Auto-starts ambient audio during active agent runs.
-- Loads bundled animations from `images/`.
-- Loads user animations from the Pi config directory.
-- Masks assistant messages in-session with a binary text mask.
+- Real life genie to grant your coding wishes. Never have to rely on those pesky developers again!
+- Saves time by masking AI output. Now you don't have to even pretend like you were going to read it!
+- Displays an animation while running to keep you engaged and prevent you from spending your attention on more important things.
+- Magic wand trail output when typing. To help you really feel the vibes.
+- Ambient sounds and sound effects galore! To ensure you never get too comfortable during your...uh ... break.
+- Shiny colors and rainbows! Hope you don't have epilepsy.
 
 ## Install
 
@@ -43,7 +37,7 @@ Or install from a local checkout:
 pi install /path/to/OpenVibes
 ```
 
-After install, start a Pi session and use `/openvibes` to confirm the extension is loaded.
+After install, start a Pi session (via `pi` command in a terminal) and use `/openvibes` to confirm the extension is loaded.
 
 ## Commands
 
