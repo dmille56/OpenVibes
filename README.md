@@ -1,5 +1,7 @@
 # OpenVibes
 
+[Install](#install)
+
 ![roads](docs/roads.jpg)
 
 ## Overview
