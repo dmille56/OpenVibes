@@ -10,7 +10,8 @@
   "files": ["extensions", "images/**/*.milli", "README.md", "OPENVIBES_IMPLEMENTATION_PLAN.md"],
   "scripts": {
     "start": "pi --extension ./extensions/openvibes/index.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "release": "npm run typecheck && npm version patch && npm publish --access public"
   },
   "dependencies": {
     "@amansingh-afk/milli": "0.0.6"
