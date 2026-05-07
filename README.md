@@ -1,10 +1,10 @@
 # OpenVibes
 
-Pi extension for `milli`-powered terminal overlays.
+![roads](docs/roads.jpg)
 
 ## Overview
 
-OpenVibes adds a visual overlay to Pi sessions, masks assistant output in the visible transcript, and exposes a few commands for managing the experience.
+[Pi](https://pi.dev/) enabled genie assistant.
 
 ## Features
 
