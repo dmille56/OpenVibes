@@ -6,7 +6,7 @@
 
 ## Overview
 
-Sick of all those boring coding agents that kill your vibe? OpenVibes has a solution for you!  Enabled by [Pi](https://pi.dev/).  
+Sick of all those boring coding agents that kill your vibe with their 'words', 'security', 'reviews', etc? OpenVibes has a solution for you! Enabled by [Pi](https://pi.dev/).  
 
 ## Features
 
@@ -15,7 +15,9 @@ Sick of all those boring coding agents that kill your vibe? OpenVibes has a solu
 - Displays an animation while running to keep you engaged and prevent you from spending your attention on more important things.
 - Magic wand trail output when typing. To help you really feel the vibes.
 - Ambient sounds and sound effects galore! To ensure you never get too comfortable during your...uh ... break.
-- Shiny colors and rainbows! Hope you don't have epilepsy.
+- Shiny colors and rainbows, carefully engineered to offend at least one design reviewer.
+- No security. Major productivity improvements by skipping that stupid shit.
+- Zero tests. Yes, this is intentional. No, we don't care.
 
 ## Install
 
