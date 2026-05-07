@@ -44,21 +44,21 @@ After install, start a Pi session (via `pi` command in a terminal) and use `/ope
 ## Usage
 
 1. Start a Pi session with `pi`.
-2. Run `/openvibes status` to see whether the extension is alive and mildly judgmental.
-3. Use `/openvibes on` or `/openvibes off` to control the overlay and editor effects.
-4. Pick an animation with `/openvibes select <name>` if you want something other than the default genie nonsense.
+2. Run `/openvibes status` to check if the extension is still pretending to work for you.
+3. Use `/openvibes on` to control the overlay and editor effects. (Don't worry about if there's an off command or not you don't need one of those).
+4. Pick an animation with `/openvibes select <name>` if you want something other than the default.
 5. Use `/openvibes list` anytime you add or change animations so discovery gets refreshed.
 
 ## Commands
 
 - `/openvibes` shows current status and help.
 - `/openvibes on` enables the overlay and editor effects.
-- `/openvibes off` disables the overlay and editor effects.
+- `/openvibes off` disables the overlay and editor effects. (Warning we may not be friends anymore if you do this)
 - `/openvibes toggle` switches between enabled and disabled.
-- `/openvibes mask [status|on|off|toggle]` controls assistant masking.
+- `/openvibes mask [status|on|off|toggle]` hides the evidence. I mean, controls assistant masking.
 - `/openvibes sound [status|on|off|toggle]` controls cue playback.
 - `/openvibes ambient [status|on|off|toggle]` controls ambient loops.
-- `/openvibes volume <0-1>` adjusts playback volume.
+- `/openvibes volume <0-1>` adjusts playback volume. (0 = regret, 1 = no regrets.)
 - `/openvibes list` refreshes animation discovery and lists available animations.
 - `/openvibes select <name>` refreshes discovery and selects an animation by name.
 
@@ -111,8 +111,13 @@ OpenVibes also plays a restrained sound layer: a wake chime on session start, an
 
 If `pi-permission-system` opens an approval dialog, the overlay steps out of the way until the request resolves.
 
+## Why This Exists
+
+Why does this exist?  Good question.
+
 ## Troubleshooting
 
 - If the overlay does not appear, confirm the extension is enabled with `/openvibes on` and that the session has UI available.
 - If an animation is missing, make sure the file ends in `.milli` and restart discovery with `/openvibes list`.
 - If a user animation does not override a bundled one, verify the names match exactly.
+- If you're questioning your life choices that led you to install this, that's not normal don't do that shit.
