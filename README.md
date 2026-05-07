@@ -39,6 +39,14 @@ pi install /path/to/OpenVibes
 
 After install, start a Pi session (via `pi` command in a terminal) and use `/openvibes` to confirm the extension is loaded.
 
+## Usage
+
+1. Start a Pi session with `pi`.
+2. Run `/openvibes status` to see whether the extension is alive and mildly judgmental.
+3. Use `/openvibes on` or `/openvibes off` to control the overlay and editor effects.
+4. Pick an animation with `/openvibes select <name>` if you want something other than the default genie nonsense.
+5. Use `/openvibes list` anytime you add or change animations so discovery gets refreshed.
+
 ## Commands
 
 - `/openvibes` shows current status and help.
