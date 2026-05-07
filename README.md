@@ -21,6 +21,8 @@ Sick of all those boring coding agents that kill your vibe with their 'words', '
 
 ## Install
 
+Prerequisite: [Pi](https://pi.dev/) must already be installed.
+
 Install from npm with Pi:
 
 ```bash
