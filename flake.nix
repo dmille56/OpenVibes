@@ -21,11 +21,9 @@
 
           shellHook = ''
             export PI_CODING_AGENT_DIR="$PWD/.pi-agent"
-            export HOME="$PWD/.pi-home"
-            export XDG_CONFIG_HOME="$PWD/.xdg-config"
             export XDG_DATA_HOME="$PWD/.xdg-data"
 
-            mkdir -p "$PI_CODING_AGENT_DIR" "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
+            mkdir -p "$PI_CODING_AGENT_DIR" "$XDG_DATA_HOME"
 
             echo "OpenVibes dev shell ready: node $(node --version), tsc $(tsc --version)"
           '';
