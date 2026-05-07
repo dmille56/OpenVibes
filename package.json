@@ -19,8 +19,7 @@
     "images/**/*.milli",
     "sounds/**/*",
     "README.md",
-    "OPENVIBES_SOUND_IMPLEMENTATION_PLAN.md",
-    "OPENVIBES_IMPLEMENTATION_PLAN.md"
+    "PROJECT_SPECS.md"
   ],
   "scripts": {
     "start": "pi --extension ./extensions/openvibes/index.ts",
