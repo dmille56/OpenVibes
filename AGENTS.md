@@ -11,3 +11,4 @@
 - `/openvibes` supports `status`, `on`, `off`, `toggle`, `list`, and `select <name>`; `list` and `select` refresh animation discovery first.
 - The overlay only starts when UI is available, and it must be disposed on `agent_end` and `session_shutdown`.
 - The wand-trail editor effect is UI-only and is enabled/disabled from `settings.enabled`.
+- When updating `README.md`, preserve the existing voice: playful, sarcastic, and a little smug. Keep the jokes, keep the self-aware snark, and avoid flattening it into generic documentation prose.
