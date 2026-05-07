@@ -27,7 +27,7 @@ export const defaultOpenVibesSettings: OpenVibesSettings = {
 	selectedAnimation: "ai_genie",
 	soundEnabled: true,
 	ambientEnabled: true,
-	volume: 0.3,
+	volume: 1.0,
 };
 
 export function getOpenVibesPackageRoot(): string {

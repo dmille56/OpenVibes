@@ -86,7 +86,7 @@ ${PI_CODING_AGENT_DIR:-~/.pi/agent}/openvibes/animations/
 Notes:
 
 - Default settings are `enabled: true` and `selectedAnimation: "ai_genie"`.
-- Default audio settings are `soundEnabled: true`, `ambientEnabled: true`, and `volume: 0.3`.
+- Default audio settings are `soundEnabled: true`, `ambientEnabled: true`, and `volume: 1.0`.
 - User animations are discovered recursively.
 - User animations override bundled animations with the same name.
 - Only `.milli` files are discovered.
