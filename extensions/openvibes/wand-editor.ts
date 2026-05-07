@@ -239,24 +239,25 @@ export class WandTrailEditor extends CustomEditor {
 		}
 	}
 
-	render(width: number): string[] {
-		if (width < 4) return super.render(width);
-		const innerWidth = Math.max(1, width - 2);
-		const lines = super.render(innerWidth);
-		if (!this.isEnabled()) return lines;
-		this.startAnimation();
-		if (lines.length === 0) return [this.buildBorderLine(width, "╭", "╮"), this.buildPlaqueLine(width), this.buildFooterLine(width), this.buildBorderLine(width, "╰", "╯")];
+		render(width: number): string[] {
+			if (width < 4) return super.render(width);
+			const innerWidth = Math.max(1, width - 2);
+			const lines = super.render(innerWidth);
+			if (!this.isEnabled()) return lines;
+			this.startAnimation();
+			if (lines.length === 0) return [this.buildBorderLine(width, "╭", "╮"), this.buildPlaqueLine(width), this.buildFooterLine(width), this.buildBorderLine(width, "╰", "╯")];
 
-		const borderColor = color(this.getFrameColor(this.getMode()));
-		const body = lines.map((line) => `${borderColor}│${RESET}${fitLine(line, innerWidth)}${borderColor}│${RESET}`);
-		const currentLine = this.getText().split("\n").at(-1) ?? "";
-		const head = Math.max(0, Math.min(innerWidth - 1, visibleWidth(currentLine)));
-		if (body.length > 0 && (this.hasContent() || this.sparks.length > 0)) {
-			const cells = Array.from({ length: innerWidth }, () => " ");
-			const put = (x: number, glyph: string, rgb: [number, number, number]) => {
-				if (x < 0 || x >= innerWidth) return;
-				cells[x] = `${color(rgb)}${glyph}${RESET}`;
-			};
+			const borderColor = color(this.getFrameColor(this.getMode()));
+			const body = lines.map((line) => `${borderColor}│${RESET}${fitLine(line, innerWidth)}${borderColor}│${RESET}`);
+			const currentLine = this.getText().split("\n").at(-1) ?? "";
+			const head = Math.max(0, Math.min(innerWidth - 1, visibleWidth(currentLine)));
+			const showingAutocomplete = (this as unknown as { isShowingAutocomplete?: () => boolean }).isShowingAutocomplete?.() ?? false;
+			if (body.length > 0 && !showingAutocomplete && (this.hasContent() || this.sparks.length > 0)) {
+				const cells = Array.from({ length: innerWidth }, () => " ");
+				const put = (x: number, glyph: string, rgb: [number, number, number]) => {
+					if (x < 0 || x >= innerWidth) return;
+					cells[x] = `${color(rgb)}${glyph}${RESET}`;
+				};
 
 			put(head, SPARKS[(this.frame / 2) % SPARKS.length | 0]!, COLORS[this.frame % COLORS.length]!);
 			for (const spark of this.sparks) {
