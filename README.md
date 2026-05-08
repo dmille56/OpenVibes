@@ -21,7 +21,7 @@ Sick of all those boring coding agents that kill your vibe with their 'words', '
 
 ## Demo
 
-[![Demo](docs/demo.webp)]
+![Demo](docs/demo.webp)
 
 ## Install
 
