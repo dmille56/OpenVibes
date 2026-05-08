@@ -1,6 +1,6 @@
 {
   "name": "@dmille56/openvibes",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "description": "OpenVibes Pi extension for milli-powered terminal overlays.",
   "keywords": [
