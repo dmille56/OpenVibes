@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+import { matchesKey, type Component } from "@mariozechner/pi-tui";
 import { OpenVibesAudioManager } from "./audio.js";
 import { CommandBurstOverlayComponent } from "./command-burst-overlay.js";
 import { MilliOverlayComponent } from "./milli-overlay.js";
@@ -50,8 +50,13 @@ export default function (pi: ExtensionAPI) {
 	let commandBurstOverlay: OverlayState | undefined;
 	let commandBurstStartPromise: Promise<void> | undefined;
 	let uiContext: ExtensionContext | undefined;
+	let terminalInputUnsubscribe: (() => void) | undefined;
 	const activePermissionRequests = new Set<string>();
 	let overlayRestartRequested = false;
+	let abortRequested = false;
+	let escapeArmed = false;
+	let lastEscapeAt = 0;
+	let escapeHintTimer: ReturnType<typeof setTimeout> | undefined;
 	let commandFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 	let assistantRestoreQueue: MaskedAssistantDetails[] = [];
 	let processedAssistantMessages = new WeakSet<object>();
@@ -68,8 +73,74 @@ export default function (pi: ExtensionAPI) {
 		if (!ctx.hasUI) return;
 		ctx.ui.setEditorComponent(
 			(tui, theme, keybindings) =>
-				new WandTrailEditor(tui, theme, keybindings, () => settings.enabled, () => agentRunning, () => settings.selectedAnimation),
+				new WandTrailEditor(
+					tui,
+					theme,
+					keybindings,
+					() => settings.enabled,
+					() => agentRunning,
+					() => settings.selectedAnimation,
+				),
 		);
+	};
+
+	const detachTerminalInputListener = (): void => {
+		terminalInputUnsubscribe?.();
+		terminalInputUnsubscribe = undefined;
+	};
+
+	const resetEscapeAbortState = (): void => {
+		if (escapeHintTimer) {
+			clearTimeout(escapeHintTimer);
+			escapeHintTimer = undefined;
+		}
+		(overlay?.component as { setAbortHint?: (text: string | undefined) => void } | undefined)?.setAbortHint?.(undefined);
+		escapeArmed = false;
+		lastEscapeAt = 0;
+		abortRequested = false;
+	};
+
+	const showAbortHint = (ctx: ExtensionContext): void => {
+		if (!ctx.hasUI) return;
+		(overlay?.component as { setAbortHint?: (text: string | undefined) => void } | undefined)?.setAbortHint?.(
+			"Press Escape again to abort",
+		);
+		if (escapeHintTimer) {
+			clearTimeout(escapeHintTimer);
+		}
+		escapeHintTimer = setTimeout(() => {
+			escapeHintTimer = undefined;
+			(overlay?.component as { setAbortHint?: (text: string | undefined) => void } | undefined)?.setAbortHint?.(undefined);
+		}, 1200);
+	};
+
+	const attachTerminalInputListener = (ctx: ExtensionContext): void => {
+		if (!ctx.hasUI || !ctx.ui.onTerminalInput) return;
+		detachTerminalInputListener();
+		terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
+			if (!settings.enabled || !agentRunning || !matchesKey(data, "escape")) {
+				return undefined;
+			}
+
+			const now = Date.now();
+			const isDoubleEscape = escapeArmed && now - lastEscapeAt < 450;
+			lastEscapeAt = now;
+
+			if (!isDoubleEscape) {
+				escapeArmed = true;
+				showAbortHint(ctx);
+				return { consume: true };
+			}
+
+			resetEscapeAbortState();
+			abortRequested = true;
+			overlayRestartRequested = false;
+			closeOverlay(ctx);
+			audio.stopAmbient();
+			(overlay?.component as { setAbortHint?: (text: string | undefined) => void } | undefined)?.setAbortHint?.(undefined);
+			ctx.abort();
+			return { consume: true };
+		});
 	};
 
 	const extractVisibleText = (content: AssistantContent, seen = new WeakSet<object>()): string => {
@@ -329,7 +400,7 @@ export default function (pi: ExtensionAPI) {
 
 	const requestOverlayRestart = (): void => {
 		overlayRestartRequested = true;
-		if (!uiContext || !settings.enabled || !agentRunning || hasPendingPermissionRequest()) return;
+		if (!uiContext || abortRequested || !settings.enabled || !agentRunning || hasPendingPermissionRequest()) return;
 		if (overlayStartPromise || overlay) return;
 		overlayRestartRequested = false;
 		void startOverlay(uiContext);
@@ -365,7 +436,7 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const startOverlay = async (ctx: ExtensionContext): Promise<void> => {
-		if (!ctx.hasUI || !settings.enabled || overlay || overlayStartPromise) return;
+		if (!ctx.hasUI || abortRequested || !settings.enabled || overlay || overlayStartPromise) return;
 
 		overlayStartPromise = (async () => {
 			const animation = getSelectedAnimation();
@@ -658,6 +729,7 @@ export default function (pi: ExtensionAPI) {
 		uiContext = ctx;
 		activePermissionRequests.clear();
 		overlayRestartRequested = false;
+		resetEscapeAbortState();
 		clearCommandFeedbackTimer();
 		closeCommandBurstOverlay(ctx);
 		processedAssistantMessages = new WeakSet<object>();
@@ -666,6 +738,7 @@ export default function (pi: ExtensionAPI) {
 		await refreshAnimations();
 		restoreBranchQueue(ctx);
 		setEditor(ctx);
+		attachTerminalInputListener(ctx);
 		showStatus(ctx, settings.enabled ? formatStatusLine("idle") : `OpenVibes off · ${getMaskingLabel()}`);
 		audio.play("wake");
 		triggerStartupBurst(ctx);
@@ -680,6 +753,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_start", async (_event, ctx) => {
 		uiContext = ctx;
 		overlayRestartRequested = false;
+		resetEscapeAbortState();
 		agentRunning = true;
 		if (settings.enabled) {
 			void startOverlay(ctx);
@@ -727,6 +801,7 @@ export default function (pi: ExtensionAPI) {
 		agentRunning = false;
 		activePermissionRequests.clear();
 		overlayRestartRequested = false;
+		resetEscapeAbortState();
 		clearCommandFeedbackTimer();
 		closeCommandBurstOverlay(ctx);
 		audio.play("settle");
@@ -740,10 +815,12 @@ export default function (pi: ExtensionAPI) {
 		agentRunning = false;
 		activePermissionRequests.clear();
 		overlayRestartRequested = false;
+		resetEscapeAbortState();
 		clearCommandFeedbackTimer();
 		closeCommandBurstOverlay(ctx);
 		audio.play("shutdown");
 		audio.dispose();
+		detachTerminalInputListener();
 		closeOverlay(ctx);
 	});
 }

@@ -79,6 +79,8 @@ export class MilliOverlayComponent implements Component {
 	private particles: Particle[] = [];
 	private pulseMode: PulseMode | undefined;
 	private pulseUntil = 0;
+	private abortHint: string | undefined;
+	private abortHintUntil = 0;
 
 	constructor(
 		private readonly tui: TUI,
@@ -152,6 +154,12 @@ export class MilliOverlayComponent implements Component {
 		this.tui.requestRender();
 	}
 
+	setAbortHint(text: string | undefined): void {
+		this.abortHint = text;
+		this.abortHintUntil = text ? Date.now() + 1200 : 0;
+		this.tui.requestRender();
+	}
+
 	render(width: number): string[] {
 		const now = Date.now();
 		const cols = Math.max(1, process.stdout.columns ?? width);
@@ -159,6 +167,13 @@ export class MilliOverlayComponent implements Component {
 		this.advanceParticles(now, cols, rows);
 		const frame = this.paintParticles(scaleGrid(this.player.frameAt(now - this.startedAt), cols, rows), now, cols, rows);
 		const lines = cellsToAnsi(frame, { color: true, background: false }).replace(/\n$/, "").split("\n");
+		if (this.abortHint && now <= this.abortHintUntil && lines.length > 0) {
+			const hint = `\x1b[1;38;2;255;223;120m${centerText(this.abortHint, cols)}\x1b[0m`;
+			lines[lines.length - 1] = hint;
+		} else if (this.abortHint && now > this.abortHintUntil) {
+			this.abortHint = undefined;
+			this.abortHintUntil = 0;
+		}
 		if (!this.pulseMode) return lines;
 		if (now > this.pulseUntil) {
 			this.pulseMode = undefined;

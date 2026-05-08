@@ -27,13 +27,14 @@ declare module "@mariozechner/pi-tui" {
 declare module "@mariozechner/pi-coding-agent" {
 	import type { Component, EditorTheme, KeybindingsManager as TUIKeybindingsManager, TUI } from "@mariozechner/pi-tui";
 
-	export interface ExtensionContext {
+		export interface ExtensionContext {
 		hasUI: boolean;
 		ui: {
 			setEditorComponent(factory?: (tui: TUI, theme: EditorTheme, keybindings: TUIKeybindingsManager) => CustomEditor): void;
 			setStatus(key: string, text: string): void;
 			notify(message: string, level?: string): void;
 			select(prompt: string, items: string[]): Promise<string | undefined>;
+			onTerminalInput?(handler: (data: string) => { consume?: boolean; data?: string } | undefined): () => void;
 			custom<T = unknown>(
 				factory: (tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, done: (value?: T) => void) => Component,
 				options?: unknown,
@@ -43,8 +44,9 @@ declare module "@mariozechner/pi-coding-agent" {
 		};
 		sessionManager: {
 			getBranch(): Array<{ type: string; customType?: string; data?: unknown }>;
-			getEntries?(): Array<{ type: string; customType?: string; data?: unknown }>;
+		getEntries?(): Array<{ type: string; customType?: string; data?: unknown }>;
 		};
+		abort(): void;
 	}
 
 	export interface ExtensionCommandContext extends ExtensionContext {}
