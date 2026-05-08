@@ -18,6 +18,7 @@
     "extensions",
     "images/**/*.milli",
     "sounds/**/*",
+    "docs/demo.webp",
     "README.md",
     "PROJECT_SPECS.md"
   ],
