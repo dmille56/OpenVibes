@@ -19,6 +19,10 @@ Sick of all those boring coding agents that kill your vibe with their 'words', '
 - No security. Major productivity improvements by skipping that stupid shit.
 - Zero tests. Yes, this is intentional. No, we don't care.
 
+## Demo
+
+[![Demo](docs/demo.webp)]
+
 ## Install
 
 Prerequisite: [Pi](https://pi.dev/) must already be installed.
