@@ -41,10 +41,10 @@ const AMBIENT_MAIN_LOOP_FILES = [
 
 // Uses a different pool than the main ambient to feel distinct while waiting on permissions.
 const AMBIENT_PERMISSION_LOOP_FILES = [
-	"permissions_ambient_1.mp3",
-	"permissions_ambient_2.mp3",
-	"permissions_ambient_3.mp3",
-	"permissions_ambient_4.mp3",
+	"permissions_distinct_ambient_1.mp3",
+	"permissions_distinct_ambient_2.mp3",
+	"permissions_distinct_ambient_3.mp3",
+	"permissions_distinct_ambient_4.mp3",
 ] as const;
 
 function clampVolume(volume: number): number {
