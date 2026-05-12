@@ -17,6 +17,11 @@
             pkgs.nodejs_24
             pkgs.typescript
             llm-agents.packages.${system}.pi
+            (pkgs.writeShellScriptBin "pi-vanilla" ''
+              #!/usr/bin/env sh
+              unset PI_CODING_AGENT_DIR
+              command pi "$@"
+            '')
           ];
 
           shellHook = ''
