@@ -421,12 +421,30 @@ export default function (pi: ExtensionAPI) {
 				clearOverlay();
 			}
 			overlayRestartRequested = true;
+			if (
+				activePermissionRequests.size === 1 &&
+				settings.enabled &&
+				settings.soundEnabled &&
+				settings.ambientEnabled &&
+				agentRunning
+			) {
+				void audio.startAmbient({ mode: "permission" });
+			}
 			return;
 		}
 
 		if (event.state === "approved" || event.state === "denied") {
 			activePermissionRequests.delete(requestId);
 			audio.play(event.state === "approved" ? "approve" : "deny", { throttleMs: 120 });
+			if (
+				activePermissionRequests.size === 0 &&
+				settings.enabled &&
+				settings.soundEnabled &&
+				settings.ambientEnabled &&
+				agentRunning
+			) {
+				void audio.startAmbient({ mode: "main" });
+			}
 			requestOverlayRestart();
 		}
 	};
@@ -495,8 +513,8 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const syncAmbientAudio = async (): Promise<void> => {
-		if (settings.enabled && settings.soundEnabled && settings.ambientEnabled && agentRunning && !hasPendingPermissionRequest()) {
-			await audio.startAmbient();
+		if (settings.enabled && settings.soundEnabled && settings.ambientEnabled && agentRunning) {
+			await audio.startAmbient({ mode: hasPendingPermissionRequest() ? "permission" : "main" });
 			return;
 		}
 		audio.stopAmbient();

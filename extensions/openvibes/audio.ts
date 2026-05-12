@@ -15,6 +15,8 @@ export type OpenVibesSoundName =
 	| "deny"
 	| "shutdown";
 
+type AmbientMode = "main" | "permission";
+
 type AudioPlayerKind = "mpv" | "ffplay";
 
 const SOUND_FILES: Record<OpenVibesSoundName, string> = {
@@ -30,11 +32,19 @@ const SOUND_FILES: Record<OpenVibesSoundName, string> = {
 	shutdown: "openvibes_shutdown.mp3",
 };
 
-const AMBIENT_LOOP_FILES = [
+const AMBIENT_MAIN_LOOP_FILES = [
 	"openvibes_ambient_loop_1.mp3",
 	"openvibes_ambient_loop_2.mp3",
 	"openvibes_ambient_loop_3.mp3",
 	"openvibes_ambient_loop_4.mp3",
+] as const;
+
+// Uses a different pool than the main ambient to feel distinct while waiting on permissions.
+const AMBIENT_PERMISSION_LOOP_FILES = [
+	"permissions_ambient_1.mp3",
+	"permissions_ambient_2.mp3",
+	"permissions_ambient_3.mp3",
+	"permissions_ambient_4.mp3",
 ] as const;
 
 function clampVolume(volume: number): number {
@@ -59,6 +69,7 @@ export class OpenVibesAudioManager {
 	private readonly lastPlayedAt = new Map<OpenVibesSoundName, number>();
 	private ambientProcess: ChildProcess | undefined;
 	private ambientSound: string | undefined;
+	private ambientMode: AmbientMode | undefined;
 	private volume = 0;
 
 	constructor(
@@ -148,11 +159,43 @@ export class OpenVibesAudioManager {
 		this.spawnPlayback(filePath, loop, loop);
 	}
 
-	async startAmbient(preferredFile?: string): Promise<void> {
-		if (!this.soundAllowed() || !this.isAmbientEnabled() || this.ambientProcess) return;
-		const candidates = preferredFile ? [preferredFile] : [...AMBIENT_LOOP_FILES];
-		const startIndex = preferredFile ? 0 : Math.floor(Math.random() * candidates.length);
-		const orderedCandidates = preferredFile ? candidates : [...candidates.slice(startIndex), ...candidates.slice(0, startIndex)];
+	async startAmbient(
+		preferredFileOrOptions?:
+			| string
+			| {
+					preferredFile?: string;
+					mode?: AmbientMode;
+					force?: boolean;
+				},
+	): Promise<void> {
+		if (!this.soundAllowed() || !this.isAmbientEnabled()) return;
+
+		const options =
+			typeof preferredFileOrOptions === "string"
+				? { preferredFile: preferredFileOrOptions }
+				: preferredFileOrOptions ?? {};
+		const mode: AmbientMode = options.mode ?? "main";
+		const preferredFile = options.preferredFile;
+		const force = options.force ?? false;
+
+		const previousSound = this.ambientSound;
+		// If ambient is already playing but for the wrong mode, we need to restart.
+		if (this.ambientProcess && !force && this.ambientMode === mode) return;
+		if (this.ambientProcess) {
+			this.ambientProcess.kill("SIGTERM");
+			this.ambientProcess = undefined;
+			this.ambientSound = undefined;
+			this.ambientMode = undefined;
+		}
+		const baseCandidates = mode === "permission" ? [...AMBIENT_PERMISSION_LOOP_FILES] : [...AMBIENT_MAIN_LOOP_FILES];
+		const candidates = preferredFile ? [preferredFile] : baseCandidates;
+		const filteredCandidates =
+			!preferredFile && previousSound ? candidates.filter((c) => c !== previousSound) : candidates;
+		const resolvedCandidates = filteredCandidates.length > 0 ? filteredCandidates : candidates;
+		const startIndex = preferredFile ? 0 : Math.floor(Math.random() * resolvedCandidates.length);
+		const orderedCandidates =
+			preferredFile ? resolvedCandidates : [...resolvedCandidates.slice(startIndex), ...resolvedCandidates.slice(0, startIndex)];
+
 		for (const chosenFile of orderedCandidates) {
 			const filePath = this.getSoundPath(chosenFile);
 			if (!(await this.fileExists(filePath))) continue;
@@ -160,16 +203,19 @@ export class OpenVibesAudioManager {
 			if (!child) continue;
 			this.ambientProcess = child;
 			this.ambientSound = chosenFile;
+			this.ambientMode = mode;
 			child?.once("exit", () => {
 				if (this.ambientProcess === child) {
 					this.ambientProcess = undefined;
 					this.ambientSound = undefined;
+					this.ambientMode = undefined;
 				}
 			});
 			child?.once("error", () => {
 				if (this.ambientProcess === child) {
 					this.ambientProcess = undefined;
 					this.ambientSound = undefined;
+					this.ambientMode = undefined;
 				}
 			});
 			return;
@@ -182,6 +228,7 @@ export class OpenVibesAudioManager {
 		}
 		this.ambientProcess = undefined;
 		this.ambientSound = undefined;
+		this.ambientMode = undefined;
 	}
 
 	setVolume(_volume: number): void {
@@ -198,5 +245,9 @@ export class OpenVibesAudioManager {
 
 	getAmbientSound(): string | undefined {
 		return this.ambientSound;
+	}
+
+	getAmbientMode(): AmbientMode | undefined {
+		return this.ambientMode;
 	}
 }
