@@ -416,26 +416,22 @@ export default function (pi: ExtensionAPI) {
 
 		if (event.state === "waiting") {
 			activePermissionRequests.add(requestId);
-			audio.play("settle", { throttleMs: 120 });
 			if (overlay) {
 				clearOverlay();
 			}
 			overlayRestartRequested = true;
-			if (
-				activePermissionRequests.size === 1 &&
-				settings.enabled &&
-				settings.soundEnabled &&
-				settings.ambientEnabled &&
-				agentRunning
-			) {
-				void audio.startAmbient({ mode: "permission" });
+
+			if (settings.enabled && settings.soundEnabled && settings.ambientEnabled && agentRunning) {
+				// When multiple permission requests overlap, force a fresh permission-ambient selection
+				// so the audio stays meaningfully distinct.
+				const force = activePermissionRequests.size > 1;
+				void audio.startAmbient({ mode: "permission", force });
 			}
 			return;
 		}
 
 		if (event.state === "approved" || event.state === "denied") {
 			activePermissionRequests.delete(requestId);
-			audio.play(event.state === "approved" ? "approve" : "deny", { throttleMs: 120 });
 			if (
 				activePermissionRequests.size === 0 &&
 				settings.enabled &&
@@ -443,7 +439,7 @@ export default function (pi: ExtensionAPI) {
 				settings.ambientEnabled &&
 				agentRunning
 			) {
-				void audio.startAmbient({ mode: "main" });
+				void audio.startAmbient({ mode: "main", force: true });
 			}
 			requestOverlayRestart();
 		}
