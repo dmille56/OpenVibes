@@ -12,3 +12,31 @@
 - The overlay only starts when UI is available, and it must be disposed on `agent_end` and `session_shutdown`.
 - The wand-trail editor effect is UI-only and is enabled/disabled from `settings.enabled`.
 - When updating `README.md`, preserve the existing voice: playful, sarcastic, and a little smug. Keep the jokes, keep the self-aware snark, and avoid flattening it into generic documentation prose.
+
+## Testing And Verification
+
+Before marking any task as done:
+
+1. Run `npm run lint`
+2. Fix all lint issues and re-run `npm run lint` until it exits with code 0
+3. Run a TypeScript typecheck (`npm run typecheck`)
+4. Note: this repo currently has no `npm run build` step (only `typecheck`, `lint`, and combined `check`)
+5. Confirm the relevant checks complete successfully
+
+### Definition of Done
+
+A task is only complete when:
+
+- The requested code changes are implemented
+- `npm run lint` passes
+- TypeScript typecheck passes (`npm run typecheck`)
+- Any failing checks are fixed, or their blocker is explicitly reported
+- Any relevant tests are added or updated when behavior changes (this repo currently has no test script)
+
+#### Rules
+
+- `npm run lint` is the required lint command. Do not substitute `npx xo`, `eslint`, or other lint commands unless explicitly asked.
+- Run lint before typecheck.
+- Do not mark a task complete until lint has passed and TypeScript typecheck has passed.
+- If lint or typecheck cannot be run in this environment, explicitly say so and explain why.
+- Add or update tests when behavior changes. (If the repo has no test harness yet, still document why.)
