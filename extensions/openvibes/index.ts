@@ -52,6 +52,7 @@ export default function (pi: ExtensionAPI) {
 	let uiContext: ExtensionContext | undefined;
 	let terminalInputUnsubscribe: (() => void) | undefined;
 	const activePermissionRequests = new Set<string>();
+	let activeAskUserPrompts = 0;
 	let overlayRestartRequested = false;
 	let abortRequested = false;
 	let escapeArmed = false;
@@ -400,13 +401,14 @@ export default function (pi: ExtensionAPI) {
 
 	const requestOverlayRestart = (): void => {
 		overlayRestartRequested = true;
-		if (!uiContext || abortRequested || !settings.enabled || !agentRunning || hasPendingPermissionRequest()) return;
+		if (!uiContext || abortRequested || !settings.enabled || !agentRunning || hasPendingPermissionRequest() || hasPendingAskUserPrompt()) return;
 		if (overlayStartPromise || overlay) return;
 		overlayRestartRequested = false;
 		void startOverlay(uiContext);
 	};
 
 	const hasPendingPermissionRequest = (): boolean => activePermissionRequests.size > 0;
+	const hasPendingAskUserPrompt = (): boolean => activeAskUserPrompts > 0;
 
 	const handlePermissionRequestEvent = (data: unknown): void => {
 		if (!data || typeof data !== "object") return;
@@ -462,7 +464,7 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`Failed to load OpenVibes animation ${animation.name}: ${error}`, "error");
 				return;
 			}
-			if (!ctx.hasUI || hasPendingPermissionRequest()) return;
+			if (!ctx.hasUI || hasPendingPermissionRequest() || hasPendingAskUserPrompt()) return;
 
 			let closeFn: (() => void) | undefined;
 			overlay = { close: undefined, promise: undefined, component: undefined };
@@ -499,7 +501,15 @@ export default function (pi: ExtensionAPI) {
 			});
 		})().finally(() => {
 			overlayStartPromise = undefined;
-			if (overlayRestartRequested && uiContext && settings.enabled && agentRunning && !hasPendingPermissionRequest() && !overlay) {
+			if (
+				overlayRestartRequested &&
+				uiContext &&
+				settings.enabled &&
+				agentRunning &&
+				!hasPendingPermissionRequest() &&
+				!hasPendingAskUserPrompt() &&
+				!overlay
+			) {
 				overlayRestartRequested = false;
 				void startOverlay(uiContext);
 			}
@@ -510,7 +520,7 @@ export default function (pi: ExtensionAPI) {
 
 	const syncAmbientAudio = async (): Promise<void> => {
 		if (settings.enabled && settings.soundEnabled && settings.ambientEnabled && agentRunning) {
-			await audio.startAmbient({ mode: hasPendingPermissionRequest() ? "permission" : "main" });
+			await audio.startAmbient({ mode: hasPendingPermissionRequest() || hasPendingAskUserPrompt() ? "permission" : "main" });
 			return;
 		}
 		audio.stopAmbient();
@@ -742,6 +752,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		uiContext = ctx;
 		activePermissionRequests.clear();
+		activeAskUserPrompts = 0;
 		overlayRestartRequested = false;
 		resetEscapeAbortState();
 		clearCommandFeedbackTimer();
@@ -767,6 +778,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_start", async (_event, ctx) => {
 		uiContext = ctx;
 		overlayRestartRequested = false;
+		activeAskUserPrompts = 0;
 		resetEscapeAbortState();
 		agentRunning = true;
 		if (settings.enabled) {
@@ -781,20 +793,49 @@ export default function (pi: ExtensionAPI) {
 		uiContext = ctx;
 		if (!settings.enabled) return;
 		audio.play("tool-tick", { throttleMs: 180 });
-		if (!overlay && !overlayStartPromise && !hasPendingPermissionRequest()) {
+		const toolName = event.tool?.name;
+		const isAskUser = toolName === "ask_user";
+		const isAskUserQuestion = toolName === "ask_user_question";
+		const isBlockingPrompt = isAskUser || isAskUserQuestion;
+		if (!overlay && !overlayStartPromise && !hasPendingPermissionRequest() && !hasPendingAskUserPrompt() && !isBlockingPrompt) {
 			void startOverlay(ctx);
 		}
+		if (isBlockingPrompt) {
+			activeAskUserPrompts++;
+			if (overlay) {
+				clearOverlay();
+			}
+			overlayRestartRequested = true;
+			if (settings.soundEnabled && settings.ambientEnabled && agentRunning) {
+				// When multiple prompts overlap (or one immediately follows another), force a fresh selection.
+				const force = activeAskUserPrompts > 1;
+				void audio.startAmbient({ mode: "permission", force });
+			}
+		}
 		pulseOverlay("flash");
-		const toolName = event.tool?.name ? ` · ${event.tool.name}` : "";
-		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · casting${toolName} · ${getMaskingLabel()}`);
+		const toolSuffix = toolName ? ` · ${toolName}` : "";
+		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · casting${toolSuffix} · ${getMaskingLabel()}`);
 	});
 
 	(pi.on as any)("tool_execution_end", async (event: { tool?: { name?: string } }, ctx: ExtensionContext) => {
 		if (!settings.enabled) return;
 		audio.play("success", { throttleMs: 180 });
+		const toolName = event.tool?.name;
+		const isAskUser = toolName === "ask_user";
+		const isAskUserQuestion = toolName === "ask_user_question";
+		const isBlockingPrompt = isAskUser || isAskUserQuestion;
+		if (isBlockingPrompt) {
+			activeAskUserPrompts = Math.max(0, activeAskUserPrompts - 1);
+			if (activeAskUserPrompts === 0) {
+				if (settings.soundEnabled && settings.ambientEnabled && agentRunning) {
+					void audio.startAmbient({ mode: "main", force: true });
+				}
+				requestOverlayRestart();
+			}
+		}
 		pulseOverlay("settle");
-		const toolName = event.tool?.name ? ` · ${event.tool.name}` : "";
-		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · settling${toolName} · ${getMaskingLabel()}`);
+		const toolSuffix = toolName ? ` · ${toolName}` : "";
+		showStatus(ctx, `OpenVibes on (${settings.selectedAnimation}) · settling${toolSuffix} · ${getMaskingLabel()}`);
 	});
 
 	pi.on("message_start", async (event) => {
@@ -814,6 +855,7 @@ export default function (pi: ExtensionAPI) {
 		uiContext = ctx;
 		agentRunning = false;
 		activePermissionRequests.clear();
+		activeAskUserPrompts = 0;
 		overlayRestartRequested = false;
 		resetEscapeAbortState();
 		clearCommandFeedbackTimer();
@@ -828,6 +870,7 @@ export default function (pi: ExtensionAPI) {
 		uiContext = ctx;
 		agentRunning = false;
 		activePermissionRequests.clear();
+		activeAskUserPrompts = 0;
 		overlayRestartRequested = false;
 		resetEscapeAbortState();
 		clearCommandFeedbackTimer();
