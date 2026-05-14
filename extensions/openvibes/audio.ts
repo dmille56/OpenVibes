@@ -67,6 +67,8 @@ export class OpenVibesAudioManager {
 	private readonly player: AudioPlayerKind | undefined = findPlayer();
 	private readonly activeProcesses = new Set<ChildProcess>();
 	private readonly lastPlayedAt = new Map<OpenVibesSoundName, number>();
+	private ambientTransition: Promise<void> = Promise.resolve();
+	private ambientRequestId = 0;
 	private ambientProcess: ChildProcess | undefined;
 	private ambientSound: string | undefined;
 	private ambientMode: AmbientMode | undefined;
@@ -170,6 +172,8 @@ export class OpenVibesAudioManager {
 	): Promise<void> {
 		if (!this.soundAllowed() || !this.isAmbientEnabled()) return;
 
+		const requestId = ++this.ambientRequestId;
+
 		const options =
 			typeof preferredFileOrOptions === "string"
 				? { preferredFile: preferredFileOrOptions }
@@ -178,51 +182,60 @@ export class OpenVibesAudioManager {
 		const preferredFile = options.preferredFile;
 		const force = options.force ?? false;
 
-		const previousSound = this.ambientSound;
-		// If ambient is already playing but for the wrong mode, we need to restart.
-		if (this.ambientProcess && !force && this.ambientMode === mode) return;
-		if (this.ambientProcess) {
-			this.ambientProcess.kill("SIGTERM");
-			this.ambientProcess = undefined;
-			this.ambientSound = undefined;
-			this.ambientMode = undefined;
-		}
-		const baseCandidates = mode === "permission" ? [...AMBIENT_PERMISSION_LOOP_FILES] : [...AMBIENT_MAIN_LOOP_FILES];
-		const candidates = preferredFile ? [preferredFile] : baseCandidates;
-		const filteredCandidates =
-			!preferredFile && previousSound ? candidates.filter((c) => c !== previousSound) : candidates;
-		const resolvedCandidates = filteredCandidates.length > 0 ? filteredCandidates : candidates;
-		const startIndex = preferredFile ? 0 : Math.floor(Math.random() * resolvedCandidates.length);
-		const orderedCandidates =
-			preferredFile ? resolvedCandidates : [...resolvedCandidates.slice(startIndex), ...resolvedCandidates.slice(0, startIndex)];
+		this.ambientTransition = this.ambientTransition.then(async () => {
+			if (requestId !== this.ambientRequestId) return;
 
-		for (const chosenFile of orderedCandidates) {
-			const filePath = this.getSoundPath(chosenFile);
-			if (!(await this.fileExists(filePath))) continue;
-			const child = this.spawnPlayback(filePath, true, true);
-			if (!child) continue;
-			this.ambientProcess = child;
-			this.ambientSound = chosenFile;
-			this.ambientMode = mode;
-			child?.once("exit", () => {
-				if (this.ambientProcess === child) {
-					this.ambientProcess = undefined;
-					this.ambientSound = undefined;
-					this.ambientMode = undefined;
-				}
-			});
-			child?.once("error", () => {
-				if (this.ambientProcess === child) {
-					this.ambientProcess = undefined;
-					this.ambientSound = undefined;
-					this.ambientMode = undefined;
-				}
-			});
-			return;
-		}
+			const previousSound = this.ambientSound;
+			if (this.ambientProcess && !force && this.ambientMode === mode) return;
+			if (this.ambientProcess) {
+				this.ambientProcess.kill("SIGTERM");
+				this.ambientProcess = undefined;
+				this.ambientSound = undefined;
+				this.ambientMode = undefined;
+			}
+
+			const baseCandidates = mode === "permission" ? [...AMBIENT_PERMISSION_LOOP_FILES] : [...AMBIENT_MAIN_LOOP_FILES];
+			const candidates = preferredFile ? [preferredFile] : baseCandidates;
+			const filteredCandidates =
+				!preferredFile && previousSound ? candidates.filter((c) => c !== previousSound) : candidates;
+			const resolvedCandidates = filteredCandidates.length > 0 ? filteredCandidates : candidates;
+			const startIndex = preferredFile ? 0 : Math.floor(Math.random() * resolvedCandidates.length);
+			const orderedCandidates =
+				preferredFile ? resolvedCandidates : [...resolvedCandidates.slice(startIndex), ...resolvedCandidates.slice(0, startIndex)];
+
+			for (const chosenFile of orderedCandidates) {
+				if (requestId !== this.ambientRequestId) return;
+				const filePath = this.getSoundPath(chosenFile);
+				if (!(await this.fileExists(filePath))) continue;
+				if (requestId !== this.ambientRequestId) return;
+				const child = this.spawnPlayback(filePath, true, true);
+				if (!child) continue;
+				this.ambientProcess = child;
+				this.ambientSound = chosenFile;
+				this.ambientMode = mode;
+				child?.once("exit", () => {
+					if (this.ambientProcess === child) {
+						this.ambientProcess = undefined;
+						this.ambientSound = undefined;
+						this.ambientMode = undefined;
+					}
+				});
+				child?.once("error", () => {
+					if (this.ambientProcess === child) {
+						this.ambientProcess = undefined;
+						this.ambientSound = undefined;
+						this.ambientMode = undefined;
+					}
+				});
+				return;
+			}
+		}).catch(() => undefined);
+
+		await this.ambientTransition;
 	}
 
 	stopAmbient(): void {
+		this.ambientRequestId++;
 		if (this.ambientProcess && !this.ambientProcess.killed) {
 			this.ambientProcess.kill("SIGTERM");
 		}
