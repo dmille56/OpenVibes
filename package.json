@@ -1,6 +1,6 @@
 {
   "name": "@dmille56/openvibes",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "type": "module",
   "description": "OpenVibes Pi extension for milli-powered terminal overlays.",
   "keywords": [
@@ -60,15 +60,12 @@
       "require-unicode-regexp": "off",
       "unicorn/no-abusive-eslint-disable": "off",
       "n/prefer-global/process": "off",
-
       "import-x/no-anonymous-default-export": "off",
       "unicorn/no-anonymous-default-export": "off",
-
       "@typescript-eslint/member-ordering": "off",
       "@typescript-eslint/naming-convention": "off",
       "@typescript-eslint/consistent-type-definitions": "off",
       "@typescript-eslint/strict-void-return": "off",
-
       "@typescript-eslint/no-misused-promises": "off",
       "@typescript-eslint/no-unsafe-assignment": "off",
       "@typescript-eslint/no-unsafe-argument": "off",
@@ -76,14 +73,11 @@
       "@typescript-eslint/no-unsafe-type-assertion": "off",
       "@typescript-eslint/prefer-nullish-coalescing": "off",
       "@typescript-eslint/restrict-template-expressions": "off",
-
       "no-await-in-loop": "off",
       "no-bitwise": "off",
-
       "unicorn/no-array-sort": "off",
       "unicorn/prefer-math-trunc": "off",
       "unicorn/prefer-spread": "off",
-
       "@stylistic/padding-line-between-statements": "off"
     }
   },
