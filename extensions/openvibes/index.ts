@@ -64,6 +64,7 @@ export default function (pi: ExtensionAPI) {
   const activePermissionRequests = new Set<string>();
   let activeAskUserPrompts = 0;
   let overlayRestartRequested = false;
+  let overlaySuppressionToken = 0;
   let abortRequested = false;
   let escapeArmed = false;
   let lastEscapeAt = 0;
@@ -542,6 +543,44 @@ export default function (pi: ExtensionAPI) {
     activePermissionRequests.size > 0;
   const hasPendingAskUserPrompt = (): boolean => activeAskUserPrompts > 0;
 
+  const isBlockingTool = (name?: string): boolean =>
+    name === 'ask_user' ||
+    name === 'ask_user_question' ||
+    name === 'request_user_input';
+
+  const extractToolName = (event: unknown): string | undefined => {
+    if (!event || typeof event !== 'object') return undefined;
+    const event_ = event as Record<string, unknown> & {
+      tool?: {name?: unknown; id?: unknown};
+      toolName?: unknown;
+      name?: unknown;
+    };
+
+    const candidates: unknown[] = [
+      event_.tool?.name,
+      event_.tool?.id,
+      event_.toolName,
+      event_.name,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') continue;
+      const trimmed = candidate.trim();
+      if (!trimmed) continue;
+      return trimmed;
+    }
+
+    return undefined;
+  };
+
+  const debugRequestUserInput =
+    process.env.OPENVIBES_DEBUG_REQUEST_USER_INPUT === '1';
+
+  const debugToolState = (ctx: ExtensionContext, message: string): void => {
+    if (!debugRequestUserInput) return;
+    showStatus(ctx, `OpenVibes · DEBUG · ${message}`);
+  };
+
   const handlePermissionRequestEvent = (data: unknown): void => {
     if (!data || typeof data !== 'object') return;
     const event = data as PermissionRequestBusEvent;
@@ -605,6 +644,8 @@ export default function (pi: ExtensionAPI) {
     )
       return;
 
+    const tokenAtStart = overlaySuppressionToken;
+
     overlayStartPromise = (async () => {
       const animation = getSelectedAnimation();
       if (!animation) return;
@@ -619,8 +660,12 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      // If a blocking prompt started while we were loading, abort.
+      if (tokenAtStart !== overlaySuppressionToken) return;
+
       if (
         !ctx.hasUI ||
+        tokenAtStart !== overlaySuppressionToken ||
         hasPendingPermissionRequest() ||
         hasPendingAskUserPrompt()
       )
@@ -631,6 +676,12 @@ export default function (pi: ExtensionAPI) {
       try {
         overlay.promise = ctx.ui.custom(
           (tui, theme, _keybindings, done) => {
+            // Belt-and-suspenders: if a suppression token changed just as
+            // we're mounting, close immediately.
+            if (tokenAtStart !== overlaySuppressionToken) {
+              done(undefined);
+            }
+
             closeFn = () => {
               done(undefined);
             };
@@ -638,6 +689,15 @@ export default function (pi: ExtensionAPI) {
             overlay!.close = closeFn;
             const component = new MilliOverlayComponent(tui, player);
             overlay!.component = component;
+
+            if (
+              tokenAtStart !== overlaySuppressionToken ||
+              hasPendingPermissionRequest() ||
+              hasPendingAskUserPrompt()
+            ) {
+              closeFn();
+            }
+
             return component;
           },
           {
@@ -655,6 +715,17 @@ export default function (pi: ExtensionAPI) {
         throw error;
       }
 
+      // If we were suppressed after mounting, close immediately.
+      if (
+        tokenAtStart !== overlaySuppressionToken ||
+        hasPendingPermissionRequest() ||
+        hasPendingAskUserPrompt()
+      ) {
+        closeFn?.();
+        overlay = undefined;
+        return;
+      }
+
       ctx.ui.setWorkingVisible?.(false);
       const overlayPromise = overlay.promise;
       if (!overlayPromise) return;
@@ -667,11 +738,13 @@ export default function (pi: ExtensionAPI) {
         });
     })().finally(() => {
       overlayStartPromise = undefined;
+      const tokenIsStillClear = overlaySuppressionToken === tokenAtStart;
       if (
         overlayRestartRequested &&
         uiContext &&
         settings.enabled &&
         agentRunning &&
+        tokenIsStillClear &&
         !hasPendingPermissionRequest() &&
         !hasPendingAskUserPrompt() &&
         !overlay
@@ -1110,14 +1183,19 @@ export default function (pi: ExtensionAPI) {
 
   (pi.on as any)(
     'tool_execution_start',
-    async (event: {tool?: {name?: string}}, ctx: ExtensionContext) => {
+    async (event: unknown, ctx: ExtensionContext) => {
       uiContext = ctx;
       if (!settings.enabled) return;
       audio.play('tool-tick', {throttleMs: 180});
-      const toolName = event.tool?.name;
-      const isAskUser = toolName === 'ask_user';
-      const isAskUserQuestion = toolName === 'ask_user_question';
-      const isBlockingPrompt = isAskUser || isAskUserQuestion;
+      const toolName = extractToolName(event);
+      const isBlockingPrompt = isBlockingTool(toolName);
+
+      if (toolName === 'request_user_input') {
+        debugToolState(
+          ctx,
+          `tool_execution_start · toolName=${toolName} · blocking=${isBlockingPrompt} · activeAskUserPrompts=${activeAskUserPrompts} · overlay=${overlay ? 'yes' : 'no'} · overlayStartPromise=${overlayStartPromise ? 'yes' : 'no'}`,
+        );
+      }
       if (
         !overlay &&
         !overlayStartPromise &&
@@ -1129,6 +1207,8 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (isBlockingPrompt) {
+        // Suppress any in-flight overlay creation while a blocking tool UI is active.
+        overlaySuppressionToken++;
         activeAskUserPrompts++;
         if (overlay) {
           clearOverlay();
@@ -1153,13 +1233,18 @@ export default function (pi: ExtensionAPI) {
 
   (pi.on as any)(
     'tool_execution_end',
-    async (event: {tool?: {name?: string}}, ctx: ExtensionContext) => {
+    async (event: unknown, ctx: ExtensionContext) => {
       if (!settings.enabled) return;
       audio.play('success', {throttleMs: 180});
-      const toolName = event.tool?.name;
-      const isAskUser = toolName === 'ask_user';
-      const isAskUserQuestion = toolName === 'ask_user_question';
-      const isBlockingPrompt = isAskUser || isAskUserQuestion;
+      const toolName = extractToolName(event);
+      const isBlockingPrompt = isBlockingTool(toolName);
+
+      if (toolName === 'request_user_input') {
+        debugToolState(
+          ctx,
+          `tool_execution_end · toolName=${toolName} · blocking=${isBlockingPrompt} · activeAskUserPrompts=${activeAskUserPrompts} · overlay=${overlay ? 'yes' : 'no'}`,
+        );
+      }
       if (isBlockingPrompt) {
         activeAskUserPrompts = Math.max(0, activeAskUserPrompts - 1);
         if (activeAskUserPrompts === 0) {
