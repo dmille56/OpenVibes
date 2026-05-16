@@ -63,6 +63,7 @@ export default function (pi: ExtensionAPI) {
   let terminalInputUnsubscribe: (() => void) | undefined;
   const activePermissionRequests = new Set<string>();
   let activeAskUserPrompts = 0;
+  let activePlanReviews = 0;
   let overlayRestartRequested = false;
   let overlaySuppressionToken = 0;
   let abortRequested = false;
@@ -146,6 +147,9 @@ export default function (pi: ExtensionAPI) {
       if (!settings.enabled || !agentRunning || !matchesKey(data, 'escape')) {
         return undefined;
       }
+
+      // Don’t let Escape abort the agent while the plan review UI is open.
+      if (activePlanReviews > 0) return undefined;
 
       const now = Date.now();
       const isDoubleEscape = escapeArmed && now - lastEscapeAt < 450;
@@ -523,6 +527,81 @@ export default function (pi: ExtensionAPI) {
     uiContext?.ui.setWorkingVisible?.(true);
   };
 
+  const getAssistantMessagesFromBranch = (
+    ctx: ExtensionContext,
+  ): AssistantMessageLike[] => {
+    const branch = ctx.sessionManager.getBranch() as unknown[];
+    const messages: AssistantMessageLike[] = [];
+
+    for (const entry of branch) {
+      if (!entry || typeof entry !== 'object') continue;
+
+      const entry_ = entry as {type?: unknown; message?: unknown};
+      if (entry_.type !== 'message') continue;
+
+      const message = entry_.message as AssistantMessageLike | undefined;
+      if (message?.role !== 'assistant') continue;
+
+      messages.push(message);
+    }
+
+    return messages;
+  };
+
+  const unmaskAssistantMessagesInPlace = (ctx: ExtensionContext): void => {
+    if (!settings.maskAssistantOutput) return;
+
+    for (const message of getAssistantMessagesFromBranch(ctx)) {
+      const maskedMessage = message as MaskedAssistantMessage;
+      const originalContent = maskedMessage[maskedOriginalContentKey];
+      if (originalContent !== undefined) {
+        message.content = originalContent;
+      }
+    }
+  };
+
+  const remaskAssistantMessagesInPlace = (ctx: ExtensionContext): void => {
+    if (!settings.maskAssistantOutput) return;
+
+    for (const message of getAssistantMessagesFromBranch(ctx)) {
+      const maskedMessage = message as MaskedAssistantMessage;
+      const originalContent = maskedMessage[maskedOriginalContentKey];
+      if (originalContent === undefined) continue;
+
+      message.content = maskVisibleContent(originalContent);
+    }
+  };
+
+  const beginPlanReview = (ctx: ExtensionContext): void => {
+    activePlanReviews++;
+    overlaySuppressionToken++;
+
+    resetEscapeAbortState();
+    if (overlay) closeOverlay(ctx);
+
+    unmaskAssistantMessagesInPlace(ctx);
+
+    if (settings.soundEnabled && settings.ambientEnabled && agentRunning) {
+      const force = activePlanReviews > 1;
+      void audio.startAmbient({mode: 'permission', force});
+    }
+  };
+
+  const endPlanReview = (ctx: ExtensionContext): void => {
+    if (activePlanReviews <= 0) return;
+
+    activePlanReviews--;
+    if (activePlanReviews !== 0) return;
+
+    remaskAssistantMessagesInPlace(ctx);
+
+    if (settings.soundEnabled && settings.ambientEnabled && agentRunning) {
+      void audio.startAmbient({mode: 'main', force: true});
+    }
+
+    requestOverlayRestart();
+  };
+
   const requestOverlayRestart = (): void => {
     overlayRestartRequested = true;
     if (
@@ -530,6 +609,7 @@ export default function (pi: ExtensionAPI) {
       abortRequested ||
       !settings.enabled ||
       !agentRunning ||
+      activePlanReviews > 0 ||
       hasPendingPermissionRequest() ||
       hasPendingAskUserPrompt()
     )
@@ -1157,6 +1237,50 @@ export default function (pi: ExtensionAPI) {
     handlePermissionRequestEvent,
   );
 
+  const extractCommandName = (event: unknown): string | undefined => {
+    if (!event || typeof event !== 'object') return undefined;
+    const event_ = event as Record<string, unknown> & {
+      command?: {name?: unknown; id?: unknown};
+      commandName?: unknown;
+      name?: unknown;
+    };
+
+    const candidates: unknown[] = [
+      event_.command?.name,
+      event_.command?.id,
+      event_.commandName,
+      event_.name,
+      event_.command,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') continue;
+      const trimmed = candidate.trim();
+      if (!trimmed) continue;
+      return trimmed;
+    }
+
+    return undefined;
+  };
+
+  pi.events.on('command_execution_start', (...args: any[]) => {
+    const [event, ctx] = args;
+    const commandName = extractCommandName(event);
+    if (commandName !== 'annotate-plan') return;
+    if (!ctx || typeof ctx !== 'object') return;
+
+    beginPlanReview(ctx as ExtensionContext);
+  });
+
+  pi.events.on('command_execution_end', (...args: any[]) => {
+    const [event, ctx] = args;
+    const commandName = extractCommandName(event);
+    if (commandName !== 'annotate-plan') return;
+    if (!ctx || typeof ctx !== 'object') return;
+
+    endPlanReview(ctx as ExtensionContext);
+  });
+
   (pi.on as any)('context', async (event: {messages: SessionMessage[]}) => {
     return {messages: unmaskContextMessages(event.messages)};
   });
@@ -1189,6 +1313,11 @@ export default function (pi: ExtensionAPI) {
       audio.play('tool-tick', {throttleMs: 180});
       const toolName = extractToolName(event);
       const isBlockingPrompt = isBlockingTool(toolName);
+      const isPlanReviewTool = toolName === 'annotate_plan';
+
+      if (isPlanReviewTool) {
+        beginPlanReview(ctx);
+      }
 
       if (toolName === 'request_user_input') {
         debugToolState(
@@ -1199,9 +1328,11 @@ export default function (pi: ExtensionAPI) {
       if (
         !overlay &&
         !overlayStartPromise &&
+        activePlanReviews === 0 &&
         !hasPendingPermissionRequest() &&
         !hasPendingAskUserPrompt() &&
-        !isBlockingPrompt
+        !isBlockingPrompt &&
+        !isPlanReviewTool
       ) {
         void startOverlay(ctx);
       }
@@ -1238,6 +1369,11 @@ export default function (pi: ExtensionAPI) {
       audio.play('success', {throttleMs: 180});
       const toolName = extractToolName(event);
       const isBlockingPrompt = isBlockingTool(toolName);
+      const isPlanReviewTool = toolName === 'annotate_plan';
+
+      if (isPlanReviewTool) {
+        endPlanReview(ctx);
+      }
 
       if (toolName === 'request_user_input') {
         debugToolState(
@@ -1287,6 +1423,7 @@ export default function (pi: ExtensionAPI) {
     agentRunning = false;
     activePermissionRequests.clear();
     activeAskUserPrompts = 0;
+    activePlanReviews = 0;
     overlayRestartRequested = false;
     resetEscapeAbortState();
     clearCommandFeedbackTimer();
@@ -1307,6 +1444,7 @@ export default function (pi: ExtensionAPI) {
     agentRunning = false;
     activePermissionRequests.clear();
     activeAskUserPrompts = 0;
+    activePlanReviews = 0;
     overlayRestartRequested = false;
     resetEscapeAbortState();
     clearCommandFeedbackTimer();
