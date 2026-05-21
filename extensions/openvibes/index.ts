@@ -1,3 +1,5 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -5,12 +7,14 @@ import type {
 } from '@mariozechner/pi-coding-agent';
 import {matchesKey, type Component} from '@mariozechner/pi-tui';
 import {OpenVibesAudioManager} from './audio.js';
+import {registerOpenVibesBuiltinToolRenderers} from './builtin-tool-renderers.js';
 import {CommandBurstOverlayComponent} from './command-burst-overlay.js';
 import {MilliOverlayComponent} from './milli-overlay.js';
 import {WandTrailEditor} from './wand-editor.js';
 import {
   defaultOpenVibesSettings,
   getOpenVibesAnimationDir,
+  getOpenVibesConfigRoot,
   type OpenVibesAnimation,
   type OpenVibesSettings,
   OPENVIBES_MASK_CUSTOM_TYPE,
@@ -53,6 +57,8 @@ type OverlayState = {
 };
 
 export default function (pi: ExtensionAPI) {
+  registerOpenVibesBuiltinToolRenderers(pi);
+
   let settings: OpenVibesSettings = {...defaultOpenVibesSettings};
   let animations: OpenVibesAnimation[] = [];
   let overlay: OverlayState | undefined;
@@ -64,6 +70,10 @@ export default function (pi: ExtensionAPI) {
   const activePermissionRequests = new Set<string>();
   let activeAskUserPrompts = 0;
   let activePlanReviews = 0;
+  let activeToolExecutionDepth = 0;
+  let activeToolExecutionStack: string[] = [];
+  let permissionBlockingToolDepth: number | undefined;
+  let permissionBlockingToolName: string | undefined;
   let overlayRestartRequested = false;
   let overlaySuppressionToken = 0;
   let abortRequested = false;
@@ -71,6 +81,17 @@ export default function (pi: ExtensionAPI) {
   let lastEscapeAt = 0;
   let escapeHintTimer: ReturnType<typeof setTimeout> | undefined;
   let commandFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let permissionOverlayRestartTimer: ReturnType<typeof setTimeout> | undefined;
+  let overlayPermissionCooldownRestartTimer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
+
+  // Permission/dialog UIs can visually stick around slightly after the
+  // permission bus event resolves (approved/denied). During that window we
+  // suppress overlay restarts to avoid flicker.
+  let permissionUiSettleUntil: number | undefined;
+  const PERMISSION_UI_SETTLE_MS = 250;
+
   let assistantRestoreQueue: MaskedAssistantDetails[] = [];
   let processedAssistantMessages = new WeakSet();
   let agentRunning = false;
@@ -79,6 +100,89 @@ export default function (pi: ExtensionAPI) {
     () => settings.ambientEnabled,
     () => settings.volume,
   );
+
+  const debugEnabled = process.env.OPENVIBES_DEBUG === '1';
+  const debugStdoutEnabled = process.env.OPENVIBES_DEBUG_STDOUT !== '0';
+
+  const debugLogFilePath = (() => {
+    const explicit = process.env.OPENVIBES_DEBUG_LOG_FILE?.trim();
+    if (explicit) return explicit;
+    if (process.env.OPENVIBES_DEBUG_TO_FILE === '1') {
+      return path.join(getOpenVibesConfigRoot(), 'debug.log');
+    }
+    return undefined;
+  })();
+
+  let debugLogWritePromise: Promise<void> = Promise.resolve();
+
+  const debugLog = (message: string, extra?: Record<string, unknown>): void => {
+    if (!debugEnabled) return;
+    const ts = new Date().toISOString();
+
+    const extraText = (() => {
+      if (!extra) return '';
+      if (typeof extra === 'string') return extra;
+      try {
+        return JSON.stringify(extra);
+      } catch {
+        return '[unserializable-extra]';
+      }
+    })();
+
+    const linePrefix = `[OpenVibes · DEBUG] ${ts} · ${message}`;
+
+    if (debugStdoutEnabled) {
+      console.log(
+        `[OpenVibes · DEBUG] ${ts} · ${message}`,
+        extraText || undefined,
+      );
+    }
+
+    if (!debugLogFilePath) return;
+
+    // Fire-and-forget, but keep order via a simple promise chain.
+    debugLogWritePromise = debugLogWritePromise
+      .then(async () => {
+        await fs.mkdir(path.dirname(debugLogFilePath), {recursive: true});
+        const parts = [linePrefix];
+        if (extraText) parts.push(` · ${extraText}`);
+        const fileLine = `${parts.join('')}\n`;
+        await fs.appendFile(debugLogFilePath, fileLine, 'utf8');
+      })
+      .catch(() => undefined);
+  };
+
+  const overlayDebugSnapshot = (): Record<string, unknown> => {
+    const hasToolPermissionSuppression =
+      permissionBlockingToolDepth !== undefined &&
+      activeToolExecutionDepth >= permissionBlockingToolDepth;
+
+    const hasPermissionUiSettling =
+      permissionUiSettleUntil !== undefined &&
+      Date.now() < permissionUiSettleUntil;
+
+    const permissionUiSettleRemainingMs = permissionUiSettleUntil
+      ? Math.max(0, permissionUiSettleUntil - Date.now())
+      : undefined;
+
+    return {
+      overlay: overlay ? 'yes' : 'no',
+      overlayStartPromise: overlayStartPromise ? 'yes' : 'no',
+      overlaySuppressionToken,
+      activeAskUserPrompts,
+      activePermissionRequests: activePermissionRequests.size,
+      activeToolExecutionDepth,
+      permissionBlockingToolDepth,
+      permissionBlockingToolName,
+      hasToolPermissionSuppression,
+      hasPermissionUiSettling,
+      permissionUiSettleRemainingMs,
+      hasPendingPermissionRequest: activePermissionRequests.size > 0,
+      hasPendingAskUserPrompt: activeAskUserPrompts > 0,
+      overlayRestartRequested,
+      agentRunning,
+    };
+  };
 
   const cloneContent = (content: AssistantContent): AssistantContent =>
     structuredClone(content);
@@ -164,7 +268,7 @@ export default function (pi: ExtensionAPI) {
       resetEscapeAbortState();
       abortRequested = true;
       overlayRestartRequested = false;
-      closeOverlay(ctx);
+      closeOverlay(ctx, {reason: 'escape_abort'});
       audio.stopAmbient();
       (
         overlay?.component as
@@ -394,6 +498,23 @@ export default function (pi: ExtensionAPI) {
   ): Promise<void> => {
     if (!ctx.hasUI || commandBurstOverlay || commandBurstStartPromise) return;
 
+    if (
+      hasPendingPermissionRequest() ||
+      hasPendingAskUserPrompt() ||
+      hasToolPermissionSuppression()
+    ) {
+      debugLog('startCommandBurstOverlay() · suppressed', {
+        reason: 'permission_or_ask_user_ui_active',
+        snapshot: overlayDebugSnapshot(),
+      });
+      return;
+    }
+
+    debugLog('startCommandBurstOverlay() · starting', {
+      message,
+      snapshot: overlayDebugSnapshot(),
+    });
+
     commandBurstStartPromise = (async () => {
       let closeFn: (() => void) | undefined;
       commandBurstOverlay = {
@@ -442,6 +563,10 @@ export default function (pi: ExtensionAPI) {
             commandBurstOverlay = undefined;
           }
         });
+      debugLog('startCommandBurstOverlay() · scheduled-close', {
+        afterMs: 1050,
+        snapshot: overlayDebugSnapshot(),
+      });
       setTimeout(() => closeFn?.(), 1050);
     })().finally(() => {
       commandBurstStartPromise = undefined;
@@ -513,18 +638,94 @@ export default function (pi: ExtensionAPI) {
     return Math.max(0, Math.min(1, parsed));
   };
 
-  const closeOverlay = (ctx: ExtensionContext): void => {
+  const closeOverlay = (
+    ctx: ExtensionContext,
+    options?: {
+      restoreWorkingVisible?: boolean;
+      reason?: string;
+    },
+  ): void => {
+    const restoreWorkingVisible = options?.restoreWorkingVisible ?? true;
+    const reason = options?.reason;
+
+    debugLog('closeOverlay()', {
+      phase: 'before-close',
+      reason,
+      restoreWorkingVisible,
+      ctxHasUI: ctx.hasUI,
+      snapshot: overlayDebugSnapshot(),
+    });
+
     overlay?.close?.();
     overlay = undefined;
-    if (ctx.hasUI) {
+
+    if (ctx.hasUI && restoreWorkingVisible) {
+      debugLog('closeOverlay()', {
+        phase: 'setWorkingVisible(true)',
+        reason,
+        restoreWorkingVisible,
+        snapshot: overlayDebugSnapshot(),
+      });
       ctx.ui.setWorkingVisible?.(true);
+    } else {
+      debugLog('closeOverlay()', {
+        phase: 'skip-setWorkingVisible(true)',
+        reason,
+        restoreWorkingVisible,
+        ctxHasUI: ctx.hasUI,
+        snapshot: overlayDebugSnapshot(),
+      });
     }
+
+    debugLog('closeOverlay()', {
+      phase: 'after-close',
+      reason,
+      restoreWorkingVisible,
+      ctxHasUI: ctx.hasUI,
+      snapshot: overlayDebugSnapshot(),
+    });
   };
 
-  const clearOverlay = (): void => {
+  const clearOverlay = (options?: {
+    restoreWorkingVisible?: boolean;
+    reason?: string;
+  }): void => {
+    const restoreWorkingVisible = options?.restoreWorkingVisible ?? true;
+    const reason = options?.reason;
+
+    debugLog('clearOverlay()', {
+      phase: 'before-clear',
+      reason,
+      restoreWorkingVisible,
+      snapshot: overlayDebugSnapshot(),
+    });
+
     overlay?.close?.();
     overlay = undefined;
-    uiContext?.ui.setWorkingVisible?.(true);
+
+    if (restoreWorkingVisible) {
+      debugLog('clearOverlay()', {
+        phase: 'setWorkingVisible(true)',
+        reason,
+        restoreWorkingVisible,
+        snapshot: overlayDebugSnapshot(),
+      });
+      uiContext?.ui.setWorkingVisible?.(true);
+    } else {
+      debugLog('clearOverlay()', {
+        phase: 'skip-setWorkingVisible(true)',
+        reason,
+        restoreWorkingVisible,
+        snapshot: overlayDebugSnapshot(),
+      });
+    }
+
+    debugLog('clearOverlay()', {
+      phase: 'after-clear',
+      reason,
+      restoreWorkingVisible,
+      snapshot: overlayDebugSnapshot(),
+    });
   };
 
   const getAssistantMessagesFromBranch = (
@@ -577,7 +778,7 @@ export default function (pi: ExtensionAPI) {
     overlaySuppressionToken++;
 
     resetEscapeAbortState();
-    if (overlay) closeOverlay(ctx);
+    if (overlay) closeOverlay(ctx, {reason: 'plan_review_begin'});
 
     unmaskAssistantMessagesInPlace(ctx);
 
@@ -604,6 +805,16 @@ export default function (pi: ExtensionAPI) {
 
   const requestOverlayRestart = (): void => {
     overlayRestartRequested = true;
+    const permissionUiSettlingRemainingMs =
+      permissionUiSettleUntil === undefined
+        ? undefined
+        : Math.max(0, permissionUiSettleUntil - Date.now());
+
+    debugLog('requestOverlayRestart()', {
+      snapshot: overlayDebugSnapshot(),
+      permissionUiSettlingRemainingMs,
+    });
+
     if (
       !uiContext ||
       abortRequested ||
@@ -611,17 +822,70 @@ export default function (pi: ExtensionAPI) {
       !agentRunning ||
       activePlanReviews > 0 ||
       hasPendingPermissionRequest() ||
+      hasToolPermissionSuppression() ||
       hasPendingAskUserPrompt()
-    )
+    ) {
+      debugLog('requestOverlayRestart() · not starting', {
+        reason: 'guard-failed',
+        permissionUiSettlingRemainingMs,
+        snapshot: overlayDebugSnapshot(),
+      });
+
+      if (
+        permissionUiSettlingRemainingMs !== undefined &&
+        permissionUiSettlingRemainingMs > 0 &&
+        uiContext &&
+        !abortRequested &&
+        settings.enabled &&
+        agentRunning
+      ) {
+        if (overlayPermissionCooldownRestartTimer) {
+          clearTimeout(overlayPermissionCooldownRestartTimer);
+          overlayPermissionCooldownRestartTimer = undefined;
+        }
+
+        debugLog('requestOverlayRestart() · cooldown-blocked · scheduling', {
+          afterMs: permissionUiSettlingRemainingMs,
+          snapshot: overlayDebugSnapshot(),
+        });
+
+        overlayPermissionCooldownRestartTimer = setTimeout(() => {
+          overlayPermissionCooldownRestartTimer = undefined;
+          requestOverlayRestart();
+        }, permissionUiSettlingRemainingMs);
+      }
+
       return;
-    if (overlayStartPromise || overlay) return;
+    }
+    if (overlayStartPromise || overlay) {
+      debugLog('requestOverlayRestart() · not starting', {
+        reason: 'already-starting-or-mounted',
+        snapshot: overlayDebugSnapshot(),
+      });
+      return;
+    }
     overlayRestartRequested = false;
+    debugLog('requestOverlayRestart() · starting startOverlay', {
+      snapshot: overlayDebugSnapshot(),
+    });
     void startOverlay(uiContext);
   };
 
   const hasPendingPermissionRequest = (): boolean =>
     activePermissionRequests.size > 0;
   const hasPendingAskUserPrompt = (): boolean => activeAskUserPrompts > 0;
+
+  const hasToolPermissionSuppression = (): boolean => {
+    const toolSuppression =
+      permissionBlockingToolDepth !== undefined &&
+      activeToolExecutionDepth >= permissionBlockingToolDepth;
+
+    const permissionUiSettling =
+      permissionUiSettleUntil !== undefined &&
+      Date.now() < permissionUiSettleUntil;
+
+    return toolSuppression || permissionUiSettling;
+  };
 
   const isBlockingTool = (name?: string): boolean =>
     name === 'ask_user' ||
@@ -664,45 +928,152 @@ export default function (pi: ExtensionAPI) {
   const handlePermissionRequestEvent = (data: unknown): void => {
     if (!data || typeof data !== 'object') return;
     const event = data as PermissionRequestBusEvent;
-    const requestId = event.requestId?.trim();
+    const {requestId: requestIdRaw, state, source} = event;
+    const requestId = requestIdRaw?.trim();
     if (!requestId) return;
 
-    if (event.state === 'waiting') {
-      activePermissionRequests.add(requestId);
-      if (overlay) {
-        clearOverlay();
-      }
+    const isResolved = state === 'approved' || state === 'denied';
 
-      overlayRestartRequested = true;
+    debugLog('permission-request', {
+      phase: 'received',
+      requestId,
+      source,
+      state,
+      treatedAs: isResolved ? 'resolved' : 'pending',
+      snapshot: overlayDebugSnapshot(),
+    });
 
-      if (
-        settings.enabled &&
-        settings.soundEnabled &&
-        settings.ambientEnabled &&
-        agentRunning
-      ) {
-        // When multiple permission requests overlap, force a fresh permission-ambient selection
-        // so the audio stays meaningfully distinct.
-        const force = activePermissionRequests.size > 1;
-        void audio.startAmbient({mode: 'permission', force});
-      }
+    if (isResolved) {
+      const hadPending = activePermissionRequests.delete(requestId);
 
-      return;
-    }
+      const now = Date.now();
+      const nextUntil = now + PERMISSION_UI_SETTLE_MS;
+      const previousUntil = permissionUiSettleUntil ?? 0;
+      permissionUiSettleUntil = Math.max(previousUntil, nextUntil);
 
-    if (event.state === 'approved' || event.state === 'denied') {
-      activePermissionRequests.delete(requestId);
+      const permissionUiSettleRemainingMs = Math.max(
+        0,
+        permissionUiSettleUntil - now,
+      );
+
+      debugLog('permission-request', {
+        phase: 'resolved',
+        requestId,
+        source,
+        state,
+        hadPending,
+        pendingPermissionCount: activePermissionRequests.size,
+        permissionUiSettleUntil,
+        permissionUiSettleRemainingMs,
+        snapshot: overlayDebugSnapshot(),
+      });
+
       if (
         activePermissionRequests.size === 0 &&
         settings.enabled &&
         settings.soundEnabled &&
         settings.ambientEnabled &&
-        agentRunning
+        agentRunning &&
+        !(
+          permissionBlockingToolDepth !== undefined &&
+          activeToolExecutionDepth >= permissionBlockingToolDepth
+        )
       ) {
         void audio.startAmbient({mode: 'main', force: true});
       }
 
-      requestOverlayRestart();
+      if (permissionOverlayRestartTimer) {
+        clearTimeout(permissionOverlayRestartTimer);
+        permissionOverlayRestartTimer = undefined;
+      }
+
+      if (activePermissionRequests.size === 0) {
+        debugLog('permission-request', {
+          phase: 'scheduleOverlayRestart() · permissionUiCooldown',
+          pendingPermissionCount: activePermissionRequests.size,
+          permissionUiSettleRemainingMs,
+        });
+
+        permissionOverlayRestartTimer = setTimeout(() => {
+          permissionOverlayRestartTimer = undefined;
+          requestOverlayRestart();
+        }, permissionUiSettleRemainingMs);
+      } else {
+        debugLog('permission-request', {
+          phase: 'skipOverlayRestart() · stillPending',
+          pendingPermissionCount: activePermissionRequests.size,
+        });
+      }
+
+      return;
+    }
+
+    // Pending state (waiting / processing / prompt / etc.)
+    if (permissionUiSettleUntil !== undefined) {
+      debugLog('permission-request', {
+        phase: 'pending-clearPermissionUiCooldown',
+        requestId,
+        permissionUiSettleUntil,
+        snapshot: overlayDebugSnapshot(),
+      });
+    }
+    permissionUiSettleUntil = undefined;
+    if (overlayPermissionCooldownRestartTimer) {
+      clearTimeout(overlayPermissionCooldownRestartTimer);
+      overlayPermissionCooldownRestartTimer = undefined;
+    }
+
+    const wasAlreadyPending = activePermissionRequests.has(requestId);
+    activePermissionRequests.add(requestId);
+
+    if (permissionOverlayRestartTimer) {
+      clearTimeout(permissionOverlayRestartTimer);
+      permissionOverlayRestartTimer = undefined;
+    }
+
+    if (!wasAlreadyPending) {
+      // Bump the suppression token so any in-flight overlay start/mount
+      // can't complete after the permission UI appears.
+      overlaySuppressionToken++;
+    }
+
+    if (activeToolExecutionDepth > 0) {
+      permissionBlockingToolDepth =
+        permissionBlockingToolDepth === undefined
+          ? activeToolExecutionDepth
+          : Math.max(permissionBlockingToolDepth, activeToolExecutionDepth);
+      permissionBlockingToolName = source ?? activeToolExecutionStack.at(-1);
+    }
+
+    debugLog('permission-request', {
+      phase: 'pending',
+      requestId,
+      source,
+      state,
+      wasAlreadyPending,
+      pendingPermissionCount: activePermissionRequests.size,
+      snapshot: overlayDebugSnapshot(),
+    });
+
+    if (overlay) {
+      clearOverlay({
+        restoreWorkingVisible: false,
+        reason: 'permission_request_pending',
+      });
+    }
+
+    overlayRestartRequested = true;
+
+    if (
+      settings.enabled &&
+      settings.soundEnabled &&
+      settings.ambientEnabled &&
+      agentRunning
+    ) {
+      // When multiple permission requests overlap, force a fresh permission-ambient selection
+      // so the audio stays meaningfully distinct.
+      const force = activePermissionRequests.size > 1;
+      void audio.startAmbient({mode: 'permission', force});
     }
   };
 
@@ -726,6 +1097,13 @@ export default function (pi: ExtensionAPI) {
 
     const tokenAtStart = overlaySuppressionToken;
 
+    debugLog('startOverlay()', {
+      phase: 'init',
+      tokenAtStart,
+      animationSelection: settings.selectedAnimation,
+      snapshot: overlayDebugSnapshot(),
+    });
+
     overlayStartPromise = (async () => {
       const animation = getSelectedAnimation();
       if (!animation) return;
@@ -740,29 +1118,78 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      debugLog('startOverlay()', {
+        phase: 'animation-loaded',
+        animationName: animation.name,
+        tokenAtStart,
+        currentToken: overlaySuppressionToken,
+        snapshot: overlayDebugSnapshot(),
+      });
+
       // If a blocking prompt started while we were loading, abort.
-      if (tokenAtStart !== overlaySuppressionToken) return;
+      if (tokenAtStart !== overlaySuppressionToken) {
+        debugLog('startOverlay()', {
+          phase: 'aborted',
+          reason: 'token-mismatch-after-load',
+          tokenAtStart,
+          currentToken: overlaySuppressionToken,
+        });
+        return;
+      }
+
+      const permissionUiSettling =
+        permissionUiSettleUntil !== undefined &&
+        Date.now() < permissionUiSettleUntil;
+      const permissionUiSettleRemainingMs = permissionUiSettleUntil
+        ? Math.max(0, permissionUiSettleUntil - Date.now())
+        : undefined;
 
       if (
         !ctx.hasUI ||
         tokenAtStart !== overlaySuppressionToken ||
         hasPendingPermissionRequest() ||
-        hasPendingAskUserPrompt()
-      )
+        hasPendingAskUserPrompt() ||
+        hasToolPermissionSuppression()
+      ) {
+        if (permissionUiSettling) {
+          debugLog('startOverlay() · suppressed-by-permissionUiCooldown', {
+            permissionUiSettleRemainingMs,
+            snapshot: overlayDebugSnapshot(),
+          });
+        }
         return;
+      }
 
       let closeFn: (() => void) | undefined;
       overlay = {close: undefined, promise: undefined, component: undefined};
       try {
         overlay.promise = ctx.ui.custom(
           (tui, theme, _keybindings, done) => {
+            debugLog('overlay-custom()', {
+              phase: 'mount-callback-start',
+              tokenAtStart,
+              currentToken: overlaySuppressionToken,
+              snapshot: overlayDebugSnapshot(),
+            });
+
             // Belt-and-suspenders: if a suppression token changed just as
             // we're mounting, close immediately.
             if (tokenAtStart !== overlaySuppressionToken) {
+              debugLog('overlay-custom()', {
+                phase: 'mount-belt-abort',
+                reason: 'token-mismatch',
+                tokenAtStart,
+                currentToken: overlaySuppressionToken,
+              });
               done(undefined);
             }
 
             closeFn = () => {
+              debugLog('overlay-custom()', {
+                phase: 'closeFn-called',
+                tokenAtStart,
+                currentToken: overlaySuppressionToken,
+              });
               done(undefined);
             };
 
@@ -773,7 +1200,8 @@ export default function (pi: ExtensionAPI) {
             if (
               tokenAtStart !== overlaySuppressionToken ||
               hasPendingPermissionRequest() ||
-              hasPendingAskUserPrompt()
+              hasPendingAskUserPrompt() ||
+              hasToolPermissionSuppression()
             ) {
               closeFn();
             }
@@ -799,13 +1227,19 @@ export default function (pi: ExtensionAPI) {
       if (
         tokenAtStart !== overlaySuppressionToken ||
         hasPendingPermissionRequest() ||
-        hasPendingAskUserPrompt()
+        hasPendingAskUserPrompt() ||
+        hasToolPermissionSuppression()
       ) {
         closeFn?.();
         overlay = undefined;
         return;
       }
 
+      debugLog('startOverlay()', {
+        phase: 'setWorkingVisible(false)',
+        tokenAtStart,
+        snapshot: overlayDebugSnapshot(),
+      });
       ctx.ui.setWorkingVisible?.(false);
       const overlayPromise = overlay.promise;
       if (!overlayPromise) return;
@@ -827,8 +1261,14 @@ export default function (pi: ExtensionAPI) {
         tokenIsStillClear &&
         !hasPendingPermissionRequest() &&
         !hasPendingAskUserPrompt() &&
+        !hasToolPermissionSuppression() &&
         !overlay
       ) {
+        debugLog('startOverlay().finally() · restarting', {
+          tokenAtStart,
+          tokenIsStillClear,
+          snapshot: overlayDebugSnapshot(),
+        });
         overlayRestartRequested = false;
         void startOverlay(uiContext);
       }
@@ -846,7 +1286,9 @@ export default function (pi: ExtensionAPI) {
     ) {
       await audio.startAmbient({
         mode:
-          hasPendingPermissionRequest() || hasPendingAskUserPrompt()
+          hasPendingPermissionRequest() ||
+          hasPendingAskUserPrompt() ||
+          hasToolPermissionSuppression()
             ? 'permission'
             : 'main',
       });
@@ -978,7 +1420,7 @@ export default function (pi: ExtensionAPI) {
         pulseOverlay('settle');
         ctx.ui.notify('OpenVibes disabled', 'info');
         audio.stopAmbient();
-        closeOverlay(ctx);
+        closeOverlay(ctx, {reason: 'manual_off'});
         return;
       }
 
@@ -1211,9 +1653,22 @@ export default function (pi: ExtensionAPI) {
     uiContext = ctx;
     activePermissionRequests.clear();
     activeAskUserPrompts = 0;
+    activeToolExecutionDepth = 0;
+    activeToolExecutionStack = [];
+    permissionBlockingToolDepth = undefined;
+    permissionBlockingToolName = undefined;
+    permissionUiSettleUntil = undefined;
     overlayRestartRequested = false;
     resetEscapeAbortState();
     clearCommandFeedbackTimer();
+    if (permissionOverlayRestartTimer) {
+      clearTimeout(permissionOverlayRestartTimer);
+      permissionOverlayRestartTimer = undefined;
+    }
+    if (overlayPermissionCooldownRestartTimer) {
+      clearTimeout(overlayPermissionCooldownRestartTimer);
+      overlayPermissionCooldownRestartTimer = undefined;
+    }
     closeCommandBurstOverlay(ctx);
     processedAssistantMessages = new WeakSet();
     settings = await readSettings();
@@ -1312,8 +1767,18 @@ export default function (pi: ExtensionAPI) {
       if (!settings.enabled) return;
       audio.play('tool-tick', {throttleMs: 180});
       const toolName = extractToolName(event);
+      activeToolExecutionStack.push(toolName ?? 'unknown');
+      activeToolExecutionDepth = activeToolExecutionStack.length;
       const isBlockingPrompt = isBlockingTool(toolName);
       const isPlanReviewTool = toolName === 'annotate_plan';
+
+      debugLog('tool_execution_start', {
+        toolName,
+        isBlockingPrompt,
+        isPlanReviewTool,
+        activeAskUserPrompts,
+        snapshot: overlayDebugSnapshot(),
+      });
 
       if (isPlanReviewTool) {
         beginPlanReview(ctx);
@@ -1330,6 +1795,7 @@ export default function (pi: ExtensionAPI) {
         !overlayStartPromise &&
         activePlanReviews === 0 &&
         !hasPendingPermissionRequest() &&
+        !hasToolPermissionSuppression() &&
         !hasPendingAskUserPrompt() &&
         !isBlockingPrompt &&
         !isPlanReviewTool
@@ -1342,7 +1808,10 @@ export default function (pi: ExtensionAPI) {
         overlaySuppressionToken++;
         activeAskUserPrompts++;
         if (overlay) {
-          clearOverlay();
+          clearOverlay({
+            restoreWorkingVisible: false,
+            reason: 'blocking_tool_prompt',
+          });
         }
 
         overlayRestartRequested = true;
@@ -1371,6 +1840,26 @@ export default function (pi: ExtensionAPI) {
       const isBlockingPrompt = isBlockingTool(toolName);
       const isPlanReviewTool = toolName === 'annotate_plan';
 
+      activeToolExecutionStack.pop();
+      activeToolExecutionDepth = activeToolExecutionStack.length;
+
+      const toolPermissionSuppressionCleared =
+        permissionBlockingToolDepth !== undefined &&
+        activeToolExecutionDepth < permissionBlockingToolDepth;
+
+      if (toolPermissionSuppressionCleared) {
+        permissionBlockingToolDepth = undefined;
+        permissionBlockingToolName = undefined;
+      }
+
+      debugLog('tool_execution_end', {
+        toolName,
+        isBlockingPrompt,
+        isPlanReviewTool,
+        activeAskUserPrompts,
+        snapshot: overlayDebugSnapshot(),
+      });
+
       if (isPlanReviewTool) {
         endPlanReview(ctx);
       }
@@ -1394,6 +1883,10 @@ export default function (pi: ExtensionAPI) {
 
           requestOverlayRestart();
         }
+      }
+
+      if (toolPermissionSuppressionCleared && overlayRestartRequested) {
+        requestOverlayRestart();
       }
 
       pulseOverlay('settle');
@@ -1424,9 +1917,22 @@ export default function (pi: ExtensionAPI) {
     activePermissionRequests.clear();
     activeAskUserPrompts = 0;
     activePlanReviews = 0;
+    activeToolExecutionDepth = 0;
+    activeToolExecutionStack = [];
+    permissionBlockingToolDepth = undefined;
+    permissionBlockingToolName = undefined;
+    permissionUiSettleUntil = undefined;
     overlayRestartRequested = false;
     resetEscapeAbortState();
     clearCommandFeedbackTimer();
+    if (permissionOverlayRestartTimer) {
+      clearTimeout(permissionOverlayRestartTimer);
+      permissionOverlayRestartTimer = undefined;
+    }
+    if (overlayPermissionCooldownRestartTimer) {
+      clearTimeout(overlayPermissionCooldownRestartTimer);
+      overlayPermissionCooldownRestartTimer = undefined;
+    }
     closeCommandBurstOverlay(ctx);
     audio.play('settle');
     audio.stopAmbient();
@@ -1436,7 +1942,7 @@ export default function (pi: ExtensionAPI) {
         ? formatStatusLine('idle')
         : `OpenVibes off · ${getMaskingLabel()}`,
     );
-    closeOverlay(ctx);
+    closeOverlay(ctx, {reason: 'agent_end'});
   });
 
   pi.on('session_shutdown', async (_event, ctx) => {
@@ -1445,13 +1951,26 @@ export default function (pi: ExtensionAPI) {
     activePermissionRequests.clear();
     activeAskUserPrompts = 0;
     activePlanReviews = 0;
+    activeToolExecutionDepth = 0;
+    activeToolExecutionStack = [];
+    permissionBlockingToolDepth = undefined;
+    permissionBlockingToolName = undefined;
+    permissionUiSettleUntil = undefined;
     overlayRestartRequested = false;
     resetEscapeAbortState();
     clearCommandFeedbackTimer();
+    if (permissionOverlayRestartTimer) {
+      clearTimeout(permissionOverlayRestartTimer);
+      permissionOverlayRestartTimer = undefined;
+    }
+    if (overlayPermissionCooldownRestartTimer) {
+      clearTimeout(overlayPermissionCooldownRestartTimer);
+      overlayPermissionCooldownRestartTimer = undefined;
+    }
     closeCommandBurstOverlay(ctx);
     audio.play('shutdown');
     audio.dispose();
     detachTerminalInputListener();
-    closeOverlay(ctx);
+    closeOverlay(ctx, {reason: 'session_shutdown'});
   });
 }

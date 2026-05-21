@@ -124,8 +124,14 @@ declare module '@mariozechner/pi-coding-agent' {
         ) => void | Promise<void>;
       },
     ): void;
+    registerTool(tool: any): void;
     appendEntry(customType: string, data?: unknown): void;
   };
+
+  export function createReadTool(cwd: string, options?: unknown): any;
+  export function createBashTool(cwd: string, options?: unknown): any;
+  export function createEditTool(cwd: string, options?: unknown): any;
+  export function createWriteTool(cwd: string, options?: unknown): any;
 
   export class CustomEditor implements Component {
     protected readonly tui: TUI;
