@@ -411,11 +411,34 @@ function registerWriteTool(pi: ExtensionAPI): void {
   });
 }
 
-export function registerOpenVibesBuiltinToolRenderers(pi: ExtensionAPI): void {
-  registerReadTool(pi);
-  registerBashTool(pi);
-  registerEditTool(pi);
-  registerWriteTool(pi);
+export function registerOpenVibesBuiltinToolRenderers(
+  pi: ExtensionAPI,
+  options?: {
+    read?: boolean;
+    bash?: boolean;
+    edit?: boolean;
+    write?: boolean;
+  },
+): void {
+  const resolved = options
+    ? {
+        read: true,
+        bash: true,
+        edit: true,
+        write: true,
+        ...options,
+      }
+    : {
+        read: true,
+        bash: true,
+        edit: true,
+        write: true,
+      };
+
+  if (resolved.read) registerReadTool(pi);
+  if (resolved.bash) registerBashTool(pi);
+  if (resolved.edit) registerEditTool(pi);
+  if (resolved.write) registerWriteTool(pi);
 }
 
 export default registerOpenVibesBuiltinToolRenderers;

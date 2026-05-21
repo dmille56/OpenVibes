@@ -57,7 +57,7 @@ type OverlayState = {
 };
 
 export default function (pi: ExtensionAPI) {
-  registerOpenVibesBuiltinToolRenderers(pi);
+  let toolRenderersRegistered = false;
 
   let settings: OpenVibesSettings = {...defaultOpenVibesSettings};
   let animations: OpenVibesAnimation[] = [];
@@ -614,6 +614,9 @@ export default function (pi: ExtensionAPI) {
     return [
       `OpenVibes: ${settings.enabled ? 'on' : 'off'}`,
       `Masking: ${settings.maskAssistantOutput ? 'on' : 'off'}`,
+      `Bash tool renderer override: ${
+        settings.overrideBashToolRenderer ? 'on' : 'off'
+      }`,
       `Audio: ${formatAudioStatus()}`,
       `Animation: ${animationLabel}`,
       '',
@@ -624,6 +627,7 @@ export default function (pi: ExtensionAPI) {
       '  /openvibes mask on',
       '  /openvibes mask off',
       '  /openvibes mask toggle',
+      '  /openvibes bash-renderer [status|on|off|toggle]',
       '  /openvibes sound [status|on|off|toggle]',
       '  /openvibes ambient [status|on|off|toggle]',
       '  /openvibes volume <0-1>',
@@ -1590,6 +1594,55 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (action === 'bash-renderer') {
+        const [mode] = rest;
+        if (!mode || mode === 'status') {
+          ctx.ui.notify(
+            `Bash tool renderer override is ${
+              settings.overrideBashToolRenderer ? 'on' : 'off'
+            } (requires /reload to take effect).`,
+            'info',
+          );
+          return;
+        }
+
+        switch (mode) {
+          case 'toggle': {
+            settings.overrideBashToolRenderer =
+              !settings.overrideBashToolRenderer;
+            break;
+          }
+
+          case 'on': {
+            settings.overrideBashToolRenderer = true;
+            break;
+          }
+
+          case 'off': {
+            settings.overrideBashToolRenderer = false;
+            break;
+          }
+
+          default: {
+            ctx.ui.notify(
+              'Usage: /openvibes bash-renderer [status|on|off|toggle]',
+              'warning',
+            );
+            return;
+          }
+        }
+
+        await persistSettings();
+        showStatus(ctx, formatStatusLine(agentRunning ? 'casting' : 'idle'));
+        ctx.ui.notify(
+          `Bash tool renderer override ${
+            settings.overrideBashToolRenderer ? 'enabled' : 'disabled'
+          } (run /reload).`,
+          'info',
+        );
+        return;
+      }
+
       if (action === 'mask') {
         const [mode] = rest;
         if (!mode || mode === 'status') {
@@ -1643,7 +1696,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       ctx.ui.notify(
-        'Usage: /openvibes [status|on|off|toggle|mask <mode>|sound <mode>|ambient <mode>|volume <0-1>|list|select <name>]',
+        'Usage: /openvibes [status|on|off|toggle|mask <mode>|bash-renderer <mode>|sound <mode>|ambient <mode>|volume <0-1>|list|select <name>]',
         'warning',
       );
     },
@@ -1672,7 +1725,16 @@ export default function (pi: ExtensionAPI) {
     closeCommandBurstOverlay(ctx);
     processedAssistantMessages = new WeakSet();
     settings = await readSettings();
-    agentRunning = false;
+
+    if (!toolRenderersRegistered && settings.overrideBashToolRenderer) {
+      registerOpenVibesBuiltinToolRenderers(pi, {
+        read: false,
+        bash: true,
+        edit: false,
+        write: false,
+      });
+      toolRenderersRegistered = true;
+    }
     await refreshAnimations();
     restoreBranchQueue(ctx);
     setEditor(ctx);

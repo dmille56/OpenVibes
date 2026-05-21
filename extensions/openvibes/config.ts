@@ -13,6 +13,7 @@ export type OpenVibesSettings = {
   soundEnabled: boolean;
   ambientEnabled: boolean;
   volume: number;
+  overrideBashToolRenderer: boolean;
 };
 
 export type OpenVibesAnimation = {
@@ -28,6 +29,12 @@ export const defaultOpenVibesSettings: OpenVibesSettings = {
   soundEnabled: true,
   ambientEnabled: true,
   volume: 1,
+  // Whether OpenVibes should re-register the built-in bash tool with a
+  // custom renderer.
+  //
+  // Default is OFF because other renderer extensions (e.g. pi-tool-display)
+  // may already own `bash` rendering.
+  overrideBashToolRenderer: false,
 };
 
 export function getOpenVibesPackageRoot(): string {
@@ -85,6 +92,10 @@ export async function readSettings(): Promise<OpenVibesSettings> {
           ? parsed.ambientEnabled
           : defaultOpenVibesSettings.ambientEnabled,
       volume: normalizeVolume(parsed.volume),
+      overrideBashToolRenderer:
+        typeof parsed.overrideBashToolRenderer === 'boolean'
+          ? parsed.overrideBashToolRenderer
+          : defaultOpenVibesSettings.overrideBashToolRenderer,
     };
   } catch {
     return {...defaultOpenVibesSettings};
