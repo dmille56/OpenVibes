@@ -929,14 +929,95 @@ export default function (pi: ExtensionAPI) {
     showStatus(ctx, `OpenVibes · DEBUG · ${message}`);
   };
 
+  const normalizeRequestId = (value: unknown): string | undefined => {
+    if (value === null || value === undefined) return undefined;
+
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed || undefined;
+    }
+
+    if (typeof value === 'number' || typeof value === 'bigint') {
+      const string_ = String(value).trim();
+      return string_ || undefined;
+    }
+
+    if (typeof value === 'boolean') {
+      const string_ = (value && 'true') || 'false';
+      return string_ || undefined;
+    }
+
+    return undefined;
+  };
+
   const handlePermissionRequestEvent = (data: unknown): void => {
     if (!data || typeof data !== 'object') return;
     const event = data as PermissionRequestBusEvent;
     const {requestId: requestIdRaw, state, source} = event;
-    const requestId = requestIdRaw?.trim();
-    if (!requestId) return;
 
     const isResolved = state === 'approved' || state === 'denied';
+    const requestId = normalizeRequestId(requestIdRaw);
+
+    if (!requestId) {
+      if (isResolved && activePermissionRequests.size === 1) {
+        // Fallback: if we can't parse a requestId but exactly one request is
+        // pending, treat that as the match so overlay restarts correctly.
+        const [onlyPending] = activePermissionRequests;
+        if (onlyPending) {
+          const hadPending = activePermissionRequests.delete(onlyPending);
+          const pendingPermissionCountAfterDelete: number =
+            activePermissionRequests.size;
+
+          const now = Date.now();
+          const nextUntil = now + PERMISSION_UI_SETTLE_MS;
+          const previousUntil = permissionUiSettleUntil ?? 0;
+          permissionUiSettleUntil = Math.max(previousUntil, nextUntil);
+          const permissionUiSettleRemainingMs = Math.max(
+            0,
+            permissionUiSettleUntil - now,
+          );
+
+          debugLog('permission-request', {
+            phase: 'resolved-no-requestId · using-only-pending',
+            requestIdRaw,
+            requestId: onlyPending,
+            source,
+            state,
+            hadPending,
+            pendingPermissionCount: pendingPermissionCountAfterDelete,
+            permissionUiSettleUntil,
+            permissionUiSettleRemainingMs,
+            snapshot: overlayDebugSnapshot(),
+          });
+
+          if (
+            pendingPermissionCountAfterDelete === 0 &&
+            settings.enabled &&
+            settings.soundEnabled &&
+            settings.ambientEnabled &&
+            agentRunning &&
+            activePlanReviews < 1 &&
+            activeAskUserPrompts < 1
+          ) {
+            void audio.startAmbient({mode: 'main', force: true});
+          }
+
+          if (permissionOverlayRestartTimer) {
+            clearTimeout(permissionOverlayRestartTimer);
+            permissionOverlayRestartTimer = undefined;
+          }
+
+          if (pendingPermissionCountAfterDelete === 0) {
+            permissionOverlayRestartTimer = setTimeout(() => {
+              permissionOverlayRestartTimer = undefined;
+              requestOverlayRestart();
+            }, permissionUiSettleRemainingMs);
+          }
+        }
+      }
+
+      return;
+    }
 
     debugLog('permission-request', {
       phase: 'received',
@@ -949,6 +1030,19 @@ export default function (pi: ExtensionAPI) {
 
     if (isResolved) {
       const hadPending = activePermissionRequests.delete(requestId);
+
+      // We intentionally block overlay restarts while permission-gated tool
+      // UIs are *pending* (see the pending branch where
+      // permissionBlockingToolDepth is set). Once the permission is
+      // approved/denied, we should allow the overlay to resume even if the
+      // tool keeps running.
+      //
+      // If there are still other pending permission requests, keep the
+      // suppression until those are fully resolved.
+      if (activePermissionRequests.size === 0) {
+        permissionBlockingToolDepth = undefined;
+        permissionBlockingToolName = undefined;
+      }
 
       const now = Date.now();
       const nextUntil = now + PERMISSION_UI_SETTLE_MS;
@@ -978,10 +1072,8 @@ export default function (pi: ExtensionAPI) {
         settings.soundEnabled &&
         settings.ambientEnabled &&
         agentRunning &&
-        !(
-          permissionBlockingToolDepth !== undefined &&
-          activeToolExecutionDepth >= permissionBlockingToolDepth
-        )
+        activePlanReviews === 0 &&
+        activeAskUserPrompts === 0
       ) {
         void audio.startAmbient({mode: 'main', force: true});
       }
@@ -1912,6 +2004,18 @@ export default function (pi: ExtensionAPI) {
       if (toolPermissionSuppressionCleared) {
         permissionBlockingToolDepth = undefined;
         permissionBlockingToolName = undefined;
+      }
+
+      if (
+        toolPermissionSuppressionCleared &&
+        activePermissionRequests.size === 0 &&
+        activeAskUserPrompts === 0 &&
+        activePlanReviews === 0 &&
+        settings.soundEnabled &&
+        settings.ambientEnabled &&
+        agentRunning
+      ) {
+        void audio.startAmbient({mode: 'main'});
       }
 
       debugLog('tool_execution_end', {
