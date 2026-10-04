@@ -61,6 +61,7 @@ export default function (pi: ExtensionAPI) {
 
   let settings: OpenVibesSettings = {...defaultOpenVibesSettings};
   let animations: OpenVibesAnimation[] = [];
+  let shuffledAnimation: OpenVibesAnimation | undefined;
   let overlay: OverlayState | undefined;
   let overlayStartPromise: Promise<void> | undefined;
   let commandBurstOverlay: OverlayState | undefined;
@@ -197,7 +198,7 @@ export default function (pi: ExtensionAPI) {
           keybindings,
           () => settings.enabled,
           () => agentRunning,
-          () => settings.selectedAnimation,
+          () => getAnimationName(),
         ),
     );
   };
@@ -429,8 +430,11 @@ export default function (pi: ExtensionAPI) {
   const getMaskingLabel = (): string =>
     settings.maskAssistantOutput ? 'masking on' : 'masking off';
 
+  const getAnimationName = (): string =>
+    getSelectedAnimation()?.name ?? settings.selectedAnimation;
+
   const formatStatusLine = (state: string): string => {
-    return `OpenVibes ${settings.enabled ? 'on' : 'off'} (${settings.selectedAnimation}) · ${state} · ${getMaskingLabel()}`;
+    return `OpenVibes ${settings.enabled ? 'on' : 'off'} (${getAnimationName()}) · ${state} · ${getMaskingLabel()}`;
   };
 
   const formatAudioStatus = (): string => {
@@ -438,6 +442,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   const getSelectedAnimation = (): OpenVibesAnimation | undefined => {
+    if (agentRunning && shuffledAnimation) return shuffledAnimation;
     return (
       animations.find((item) => item.name === settings.selectedAnimation) ??
       animations[0]
@@ -619,6 +624,7 @@ export default function (pi: ExtensionAPI) {
       }`,
       `Audio: ${formatAudioStatus()}`,
       `Animation: ${animationLabel}`,
+      `Shuffle: ${settings.shuffleAnimations ? 'on' : 'off'}`,
       '',
       'Usage:',
       '  /openvibes on',
@@ -631,6 +637,7 @@ export default function (pi: ExtensionAPI) {
       '  /openvibes sound [status|on|off|toggle]',
       '  /openvibes ambient [status|on|off|toggle]',
       '  /openvibes volume <0-1>',
+      '  /openvibes shuffle [status|on|off|toggle]',
       '  /openvibes list',
       '  /openvibes select <name>',
     ].join('\n');
@@ -1196,7 +1203,7 @@ export default function (pi: ExtensionAPI) {
     debugLog('startOverlay()', {
       phase: 'init',
       tokenAtStart,
-      animationSelection: settings.selectedAnimation,
+      animationSelection: getAnimationName(),
       snapshot: overlayDebugSnapshot(),
     });
 
@@ -1647,6 +1654,37 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      if (action === 'shuffle') {
+        const [mode] = rest;
+        if (
+          rest.length > 1 ||
+          (mode && !['status', 'on', 'off', 'toggle'].includes(mode))
+        ) {
+          ctx.ui.notify(
+            'Usage: /openvibes shuffle [status|on|off|toggle]',
+            'warning',
+          );
+          return;
+        }
+
+        if (!mode || mode === 'status') {
+          ctx.ui.notify(
+            `Animation shuffle is ${settings.shuffleAnimations ? 'on' : 'off'}`,
+            'info',
+          );
+          return;
+        }
+
+        settings.shuffleAnimations =
+          mode === 'toggle' ? !settings.shuffleAnimations : mode === 'on';
+        await persistSettings();
+        ctx.ui.notify(
+          `Animation shuffle ${settings.shuffleAnimations ? 'enabled' : 'disabled'} (takes effect next agent run)`,
+          'info',
+        );
+        return;
+      }
+
       if (action === 'list') {
         await refreshAnimations();
         const items = animations.map(
@@ -1788,7 +1826,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       ctx.ui.notify(
-        'Usage: /openvibes [status|on|off|toggle|mask <mode>|bash-renderer <mode>|sound <mode>|ambient <mode>|volume <0-1>|list|select <name>]',
+        'Usage: /openvibes [status|on|off|toggle|mask <mode>|bash-renderer <mode>|sound <mode>|ambient <mode>|volume <0-1>|shuffle <mode>|list|select <name>]',
         'warning',
       );
     },
@@ -1816,6 +1854,7 @@ export default function (pi: ExtensionAPI) {
     }
     closeCommandBurstOverlay(ctx);
     processedAssistantMessages = new WeakSet();
+    shuffledAnimation = undefined;
     settings = await readSettings();
 
     if (!toolRenderersRegistered && settings.overrideBashToolRenderer) {
@@ -1899,6 +1938,11 @@ export default function (pi: ExtensionAPI) {
     overlayRestartRequested = false;
     activeAskUserPrompts = 0;
     resetEscapeAbortState();
+    // Pick once per run so overlay restarts keep the same animation.
+    shuffledAnimation =
+      settings.enabled && ctx.hasUI && settings.shuffleAnimations
+        ? animations[Math.floor(Math.random() * animations.length)]
+        : undefined;
     agentRunning = true;
     if (settings.enabled) {
       void startOverlay(ctx);
@@ -1980,7 +2024,7 @@ export default function (pi: ExtensionAPI) {
       const toolSuffix = toolName ? ` · ${toolName}` : '';
       showStatus(
         ctx,
-        `OpenVibes on (${settings.selectedAnimation}) · casting${toolSuffix} · ${getMaskingLabel()}`,
+        `OpenVibes on (${getAnimationName()}) · casting${toolSuffix} · ${getMaskingLabel()}`,
       );
     },
   );
@@ -2059,7 +2103,7 @@ export default function (pi: ExtensionAPI) {
       const toolSuffix = toolName ? ` · ${toolName}` : '';
       showStatus(
         ctx,
-        `OpenVibes on (${settings.selectedAnimation}) · settling${toolSuffix} · ${getMaskingLabel()}`,
+        `OpenVibes on (${getAnimationName()}) · settling${toolSuffix} · ${getMaskingLabel()}`,
       );
     },
   );

@@ -65,6 +65,7 @@ After install, start a Pi session (via `pi` command in a terminal) and use `/ope
 - `/openvibes sound [status|on|off|toggle]` controls cue playback.
 - `/openvibes ambient [status|on|off|toggle]` controls ambient loops.
 - `/openvibes volume <0-1>` adjusts playback volume. (0 = regret, 1 = no regrets.)
+- `/openvibes shuffle [status|on|off|toggle]` picks a random animation each agent run. Decision fatigue has been outsourced.
 - `/openvibes list` refreshes animation discovery and lists available animations.
 - `/openvibes select <name>` refreshes discovery and selects an animation by name.
 
@@ -102,12 +103,20 @@ Notes:
 
 - Default settings are `enabled: true` and `selectedAnimation: "ai_genie"`.
 - Default masking is enabled.
+- Animation shuffle defaults to off (`shuffleAnimations: false`) and is saved between sessions.
 - Default audio settings are `soundEnabled: true`, `ambientEnabled: true`, and `volume: 1.0`.
 - User animations are discovered recursively.
 - User animations override bundled animations with the same name.
 - Only `.milli` files are discovered.
 
 ## Notes
+
+Enable `/openvibes shuffle on` to pick from discovered bundled and user animations
+at the start of each agent run. Picks can repeat. Even chaos has reruns.
+Use `/openvibes list` to refresh the pool after adding animations. Shuffle changes
+take effect on the next run; permission dialogs keep the current run’s pick.
+Your manual `/openvibes select <name>` choice is preserved and used again when
+shuffle is off.
 
 When enabled, assistant messages are replaced with a generated `0`/`1` mask in the visible session output, and the original assistant content is restored before the next model call.
 

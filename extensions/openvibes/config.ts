@@ -10,6 +10,7 @@ export type OpenVibesSettings = {
   enabled: boolean;
   maskAssistantOutput: boolean;
   selectedAnimation: string;
+  shuffleAnimations: boolean;
   soundEnabled: boolean;
   ambientEnabled: boolean;
   volume: number;
@@ -26,6 +27,7 @@ export const defaultOpenVibesSettings: OpenVibesSettings = {
   enabled: true,
   maskAssistantOutput: true,
   selectedAnimation: 'ai_genie',
+  shuffleAnimations: false,
   soundEnabled: true,
   ambientEnabled: true,
   volume: 1,
@@ -83,6 +85,10 @@ export async function readSettings(): Promise<OpenVibesSettings> {
         parsed.selectedAnimation.trim()
           ? parsed.selectedAnimation.trim()
           : defaultOpenVibesSettings.selectedAnimation,
+      shuffleAnimations:
+        typeof parsed.shuffleAnimations === 'boolean'
+          ? parsed.shuffleAnimations
+          : defaultOpenVibesSettings.shuffleAnimations,
       soundEnabled:
         typeof parsed.soundEnabled === 'boolean'
           ? parsed.soundEnabled
